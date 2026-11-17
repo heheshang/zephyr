@@ -4,7 +4,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestUserMessageArgs, ChatCompletionTools, CreateChatCompletionRequestArgs,
 };
 
-use crate::tools::ToolBox;
+use crate::{agent::context::ExecutionContext, tools::ToolBox};
 
 /// 单次对话允许的最大工具调用轮次，避免模型陷入死循环。
 const MAX_TOOL_ROUNDS: usize = 8;
@@ -85,8 +85,8 @@ async fn execute_tool(toolbox: &ToolBox, function_name: &str, arguments: &str) -
         tracing::error!("{msg}");
         return msg;
     };
-
-    match tool.execute(arguments).await {
+    let mut context = ExecutionContext::new();
+    match tool.execute(arguments, &mut context).await {
         Ok(result) => {
             tracing::info!("tool_result: {result}");
             result

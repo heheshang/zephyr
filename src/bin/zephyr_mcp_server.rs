@@ -116,7 +116,7 @@ impl ExpenseServer {
                         None,
                     ))
                 }
-            }
+            },
             Err(e) => Err(McpError::internal_error(
                 format!("请求 expense-tracker-api 失败: {e}"),
                 None,

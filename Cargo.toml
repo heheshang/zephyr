@@ -2,6 +2,7 @@
 name = "zephyr"
 version = "0.1.0"
 edition = "2024"
+
 [[example]]
 name = "stream_chat"
 path = "examples/stream_chat.rs"
@@ -10,9 +11,6 @@ path = "examples/stream_chat.rs"
 name = "structured_chat"
 path = "examples/structured_chat.rs"
 
-[[example]]
-name = "gaia"
-path = "examples/gaia.rs"
 
 [[example]]
 name = "tool_call_comlete"
@@ -20,6 +18,22 @@ path = "examples/tool_call_comlete.rs"
 [[example]]
 name = "simple_agent_loop"
 path = "examples/simple_agent_loop.rs"
+
+[[example]]
+name = "agent_run"
+path = "examples/agent_run.rs"
+
+[[example]]
+name = "agent_run_structured"
+path = "examples/agent_run_structured.rs"
+
+[[bin]]
+name = "zephyr_mcp_server"
+path = "src/bin/zephyr_mcp_server.rs"
+
+[[bin]]
+name = "gaia"
+path = "src/bin/gaia.rs"
 
 
 [dependencies]
