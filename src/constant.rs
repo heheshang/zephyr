@@ -1,1 +1,1 @@
-pub const MODEL: &'static str = "qwen-plus";
+pub const MODEL: &str = "qwen-plus";

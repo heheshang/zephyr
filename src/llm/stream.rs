@@ -67,7 +67,7 @@ pub async fn chat_stream_with_retry(
             match result {
                 Ok(text) => {
                     output.push_str(&text);
-                }
+                },
                 Err(err) => return Err(err),
             }
         }

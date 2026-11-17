@@ -7,16 +7,16 @@ pub fn calculator(
     second_number: f64,
 ) -> anyhow::Result<f64, String> {
     match operator {
-        "add" => Ok(first_number + second_number),
-        "subtract" => Ok(first_number - second_number),
+        "add" | "+" => Ok(first_number + second_number),
+        "subtract" | "-" => Ok(first_number - second_number),
         "multiply" => Ok(first_number * second_number),
-        "divide" => {
+        "divide" | "/" => {
             if second_number == 0.0 {
                 Err("Cannot divide by zero".to_string())
             } else {
                 Ok(first_number / second_number)
             }
-        }
+        },
         other => Err(format!("Unsupported operator: {other}")),
     }
 }

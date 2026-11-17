@@ -1,5 +1,6 @@
 pub mod complete;
 pub mod complete_tools;
+pub mod complete_tools_loop;
 pub mod semaphore;
 pub mod stream;
 pub mod structured;

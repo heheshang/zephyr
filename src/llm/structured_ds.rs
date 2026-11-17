@@ -89,10 +89,10 @@ fn extract_json(content: &str) -> String {
     }
 
     // 3) 截取第一个 { 到最后一个 }
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if start < end {
-            return trimmed[start..=end].to_string();
-        }
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}'))
+        && start < end
+    {
+        return trimmed[start..=end].to_string();
     }
 
     trimmed.to_string()

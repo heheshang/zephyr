@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use anyhow::Result;
+use std::collections::HashMap;
 use tokio::task::JoinSet;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
@@ -46,10 +45,10 @@ pub async fn gaia_level1_experiment() -> Result<()> {
         match result {
             Ok(eval) => {
                 results.entry(eval.model.clone()).or_default().push(eval);
-            }
+            },
             Err(e) => {
                 tracing::error!("error evaluating problem: {e}");
-            }
+            },
         }
     }
 

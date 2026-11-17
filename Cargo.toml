@@ -17,6 +17,10 @@ path = "examples/gaia.rs"
 [[example]]
 name = "tool_call_comlete"
 path = "examples/tool_call_comlete.rs"
+[[example]]
+name = "simple_agent_loop"
+path = "examples/simple_agent_loop.rs"
+
 
 [dependencies]
 anyhow = "1.0.104"

@@ -47,13 +47,13 @@ async fn main() -> Result<()> {
         match result {
             Ok(Ok((prompt, output))) => {
                 tracing::info!("prompt: {prompt}, output: {output}");
-            }
+            },
             Ok(Err(e)) => {
                 tracing::error!("error: {e}");
-            }
+            },
             Err(e) => {
                 tracing::error!("error: {e}");
-            }
+            },
         }
     }
 
