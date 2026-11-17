@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
+use crate::agent::runtime::Agent;
 use crate::gaia::models::GaiaOutput;
+use crate::tools::ToolBox;
 use async_openai::types::chat::ChatCompletionRequestSystemMessageArgs;
 use async_openai::types::chat::ChatCompletionRequestUserMessageArgs;
 use async_openai::types::chat::CreateChatCompletionRequestArgs;
@@ -77,4 +81,15 @@ async fn solve_problem(model: &str, system: &str, prompt: &str) -> anyhow::Resul
     let gaia_output: GaiaOutput = serde_json::from_str(&content)?;
 
     Ok(gaia_output)
+}
+
+pub async fn solve_problem_with_tools(
+    model: &str,
+    system: &str,
+    prompt: &str,
+    toolbox: Arc<ToolBox>,
+) -> anyhow::Result<GaiaOutput> {
+    let agent = Agent::new(model, Some(system), toolbox).with_max_steps(8);
+    let result = agent.run_structured(prompt).await?;
+    Ok(result.output)
 }
