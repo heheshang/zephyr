@@ -1,1 +1,1 @@
-pub const MODEL: &str = "qwen-plus";
+pub const QWEN_MODEL: &str = "qwen-plus";

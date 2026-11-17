@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
-use zephyr::constant::MODEL;
+use zephyr::constant::QWEN_MODEL;
 use zephyr::llm::chat_completion_structured;
 
 #[tokio::main]
@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
     let response = chat_completion_structured(
-        MODEL,
+        QWEN_MODEL,
         Some("You are a helpful assistant that generates action plans for the user."),
         "I want to learn how to code in Rust.",
     )

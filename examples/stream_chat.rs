@@ -3,7 +3,7 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, Level};
 use tracing_subscriber::FmtSubscriber;
 use zephyr::llm::get_semaphore;
-use zephyr::{constant::MODEL, llm::chat_stream_with_retry};
+use zephyr::{constant::QWEN_MODEL, llm::chat_stream_with_retry};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
                 tracing::info!("\n{prompt}");
                 let permit = get_semaphore().acquire().await?;
                 let output = chat_stream_with_retry(
-                    MODEL,
+                    QWEN_MODEL,
                     Some("你是一个全能助理，请根据用户的问题给出回答。"),
                     prompt,
                 )
