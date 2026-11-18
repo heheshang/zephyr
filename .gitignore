@@ -2,3 +2,5 @@
 .env
 /.cursor
 sse_out.log
+.cursor
+candidates
