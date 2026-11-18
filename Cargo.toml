@@ -27,6 +27,13 @@ path = "examples/agent_run.rs"
 name = "agent_run_structured"
 path = "examples/agent_run_structured.rs"
 
+[[example]]
+name = "file_explorer"
+path = "examples/file_explorer.rs"
+[[example]]
+name = "search_web"
+path = "examples/search_web.rs"
+
 [[bin]]
 name = "zephyr_mcp_server"
 path = "src/bin/zephyr_mcp_server.rs"
