@@ -27,7 +27,7 @@ pub struct ExecutionContext {
     pub current_step: u32,
     pub state: HashMap<String, Value>,
     pub final_result: Option<String>,
-    pub useage: TokenUsage,
+    pub usage: TokenUsage,
 }
 impl ExecutionContext {
     pub fn new() -> Self {
@@ -37,7 +37,7 @@ impl ExecutionContext {
             current_step: 0,
             state: HashMap::new(),
             final_result: None,
-            useage: TokenUsage::default(),
+            usage: TokenUsage::default(),
         }
     }
 

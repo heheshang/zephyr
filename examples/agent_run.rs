@@ -65,9 +65,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!(
         "token 用量：prompt={} completion={} total={}",
-        result.context.useage.prompt_tokens,
-        result.context.useage.completion_tokens,
-        result.context.useage.total_tokens
+        result.context.usage.prompt_tokens,
+        result.context.usage.completion_tokens,
+        result.context.usage.total_tokens
     );
 
     println!("{:#?}", result.context);

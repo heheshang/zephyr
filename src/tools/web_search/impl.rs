@@ -29,7 +29,7 @@ impl Tool for WebSearchTool {
     async fn execute(
         &self,
         args_json: &str,
-        _context: &mut ExecutionContext,
+        _context: &ExecutionContext,
     ) -> anyhow::Result<String> {
         let args: WebSearchArgs = serde_json::from_str(args_json)?;
         match web_search(args).await {

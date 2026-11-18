@@ -11,11 +11,7 @@ pub trait Tool: Send + Sync {
 
     fn parameters(&self) -> Value;
 
-    async fn execute(
-        &self,
-        args_json: &str,
-        context: &mut ExecutionContext,
-    ) -> anyhow::Result<String>;
+    async fn execute(&self, args_json: &str, context: &ExecutionContext) -> anyhow::Result<String>;
 
     fn definition(&self) -> anyhow::Result<ChatCompletionTools> {
         let function = FunctionObjectArgs::default()

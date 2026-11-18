@@ -1,0 +1,36 @@
+姓名：孙佳琪（Jiaqi Sun）
+当前职位：资深基础架构工程师
+工作年限：6 年
+所在城市：上海
+联系方式：jiaqi.sun@example.com
+
+【核心技能】
+Rust、Go、Tokio、Tokio-util、gRPC、Prost、Pingora、Redis、Kafka、RocksDB、etcd、Raft、TiKV、Prometheus、OpenTelemetry、Kubernetes、eBPF、perf、flamegraph
+
+【工作经历】
+
+1. 2021.06 - 至今   某数据库厂商 · 分布式存储团队 · 资深基础架构工程师
+   - 参与 TiKV 存算分离方向的核心模块开发，使用 Rust 实现分布式事务与多副本一致性（Raft 协议）关键路径。
+   - 主导 RocksDB 读写路径的调优，批量导入吞吐从 18 万 QPS 提升到 27 万 QPS，P99 延迟下降 35%。
+   - 设计并实现了一套基于 Tokio 的异步 IO 线程池调度方案，CPU 利用率提升 22%，上下文切换次数下降 40%。
+   - 推动线上服务的可观测性改造，引入 OpenTelemetry 全链路追踪，线上问题定位平均时长从 2 小时降到 20 分钟。
+   - 使用 perf / flamegraph / eBPF 完成 20+ 次性能剖析专项，定位过 TLS 握手热点、序列化 CPU 浪费、锁竞争等典型问题。
+   - 作为 6 人小组的 Code Review 负责人，制定团队 Rust 编码规范与性能评审 checklist。
+
+2. 2019.09 - 2021.05   某云厂商 · 弹性计算团队 · 后端工程师
+   - 使用 Go 编写弹性伸缩控制面组件，对接 Kubernetes API Server。
+   - 负责调度器的公平性与抢占策略实现。
+
+【代表性项目】
+- 存算分离存储网关：Rust 实现，支撑 PB 级数据，跨机房 RPO < 1s。
+- 异步运行时调优专项：Tokio 调度器改造 + 自定义 IO 驱动，QPS +30%。
+- RocksDB 冷热分离：结合 compaction 策略调优，写放大降低 40%。
+
+【开源与技术影响力】
+- 为 TiKV 社区提交过 12 个 PR（存储引擎与 raftstore 相关）。
+- 在内部技术周分享《Rust 异步编程中的性能陷阱》《eBPF 在生产环境的落地》。
+- 指导过 3 名初级工程师成长，其中 1 人晋升为骨干。
+
+【自我评价】
+长期专注系统性能与稳定性，热衷于用 profiling 定位根因而不是靠经验调参；
+熟悉 Rust 所有权模型与异步并发，习惯用 loom 做并发模型验证。
