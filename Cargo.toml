@@ -34,6 +34,10 @@ path = "examples/file_explorer.rs"
 name = "search_web"
 path = "examples/search_web.rs"
 
+[[example]]
+name = "test_compression"
+path = "examples/test_compression.rs"
+
 [[bin]]
 name = "zephyr_mcp_server"
 path = "src/bin/zephyr_mcp_server.rs"
