@@ -24,5 +24,6 @@
 - 工具统一放在 `src/tools/` 下，每个工具按 `definition.rs`（schema）、`execute.rs`（执行）、`impl.rs`（Tool trait 实现）拆分，并有一个同名 `.rs` 做模块再导出。
 - `src/tools.rs` 的 `build_toolbox()` 返回 `HashMap<String, Box<dyn Tool>>`，注册 `calculator` 与 `web_search`（走 Tavily API）并连接 MCP server 拉取远端工具；`build_file_explorer_toolbox()` 提供 unzip / list / read / read_image / delete 五个文件工具。
 - `src/callback/` 下 `approval.rs` 的删除审批回调是交互式读 stdin；`search_compressor.rs` 会把过长的 `web_search` 结果分块压缩后重新向量检索。
+- Agent 回调扩展点定义在 `src/agent/callback.rs`，具体实现在 `src/callback/`。共 5 个 trait：`BeforeToolCallback`/`AfterToolCallback`（工具前后）、`BeforeLlmCallback`/`AfterLlmCallback`（模型调用前后）、`OnTaskEndCallback`（整个任务结束后，成功与失败都会触发一次）。回调返回 `Some(x)` 表示短路/覆盖，返回 `None` 表示不干预。运行时通过 `Agent::with_*_callback` 链式注册。
 - `src/gaia/` 是 GAIA benchmark 相关模块（dataset / models / evaluatior / solver），数据集从 HuggingFace 拉取，需要 `HF_TOKEN`；`src/bin/` 下的 bin 是独立 crate，不能用 `crate::` 引用库代码，必须用 `zephyr::` 路径，且 lib 侧子模块需 `pub mod` 才会对外可见。
 - `src/knowledge_base/` 分 `chunk.rs`（切分）、`embed.rs`（向量化）、`search.rs`（余弦相似度 Top-K 检索）；DashScope/Qwen 兼容网关的 embedding 接口单批最多 20 条输入，超出会报 `invalid_parameter_error: batch size is invalid`，因此 `embed_texts` 需按 20 条分批发送并按原顺序拼接结果。

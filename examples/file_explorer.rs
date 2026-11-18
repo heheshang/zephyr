@@ -4,7 +4,10 @@ use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 use zephyr::{
     agent::runtime::Agent,
-    callback::{approval::ApprovalCallback, search_compressor::SearchCompressorCallback},
+    callback::{
+        approval::ApprovalCallback, llm_logger::LlmLoggerCallback,
+        search_compressor::SearchCompressorCallback, task_summary::TaskSummaryCallback,
+    },
     constant::{QWEN_MODEL, QWEN_VL_MODEL},
     tools::build_file_explorer_toolbox,
 };
@@ -30,7 +33,12 @@ async fn main() -> anyhow::Result<()> {
         // 高危操作先过人工审批 —— delete_file 在名单里，其他文件工具都不需要审批
         .with_before_tool_callback(Arc::new(ApprovalCallback::new(["delete_file"])))
         // web_search 结果太长时自动向量压缩，不用每次手动处理
-        .with_after_tool_callback(Arc::new(SearchCompressorCallback));
+        .with_after_tool_callback(Arc::new(SearchCompressorCallback))
+        // 每次调用大模型前后都打印请求/响应摘要、token 用量与耗时
+        .with_before_llm_callback(Arc::new(LlmLoggerCallback))
+        .with_after_llm_callback(Arc::new(LlmLoggerCallback))
+        // 整个任务结束后汇总执行摘要（步数、token、结果预览）
+        .with_on_task_end_callback(Arc::new(TaskSummaryCallback));
 
     let result = agent
         .run(

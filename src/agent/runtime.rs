@@ -1,12 +1,21 @@
 //! 带回调（callback）能力的 Agent 运行时。
 //!
-//! 与 `super::runtime` 中的基础 Agent 相比，本模块在「工具调用」这一环节引入了两个扩展点：
+//! 与 `super::runtime` 中的基础 Agent 相比，本模块在「模型调用」与「工具调用」两个环节
+//! 引入了四个扩展点：
 //!
+//! - [`BeforeLlmCallback`]：在大模型真正请求**之前**被调用。返回 `Some(content)` 表示
+//!   短路（short-circuit）——跳过本次模型请求，直接把回调返回的 `content` 当作模型回复。
+//!   典型用途：命中缓存、降级到兜底答案、限流拦截。
+//! - [`AfterLlmCallback`]：在大模型返回**之后**被调用。返回 `Some(content)` 表示
+//!   覆盖模型返回的文本内容。典型用途：结果脱敏、输出格式化、记录审计日志。
 //! - [`BeforeToolCallback`]：在工具真正执行**之前**被调用。返回 `Some(content)` 表示
 //!   短路（short-circuit）——本次工具不再真正执行，直接把回调返回的 `content` 当作工具结果。
 //!   典型用途：人工审批（approval）、敏感操作拦截。
 //! - [`AfterToolCallback`]：在工具执行**之后**被调用。返回 `Some((status, content))` 表示
 //!   覆盖原本的执行状态与输出内容。典型用途：对工具结果做压缩、脱敏、二次加工。
+//!
+//! 此外还有 [`OnTaskEndCallback`]：在整个任务结束（无论成功或失败）后被调用一次，
+//! 用于生成执行摘要、落库、上报监控等收尾工作。
 //!
 //! 整体执行流程是一个「模型 → 工具 → 模型 → 工具 → …… → 最终答案」的循环（ReAct 风格），
 //! 每一步都会被记录成 [`Event`] 追加到 [`ExecutionContext`] 中，便于事后回放与审计。
@@ -21,10 +30,14 @@
 //!     D --> E{"current_step 尚未达到 max_steps ?"}
 //!     E -- "否" --> E1["bail! 超过最大步数，未产出最终答案"]
 //!     E -- "是" --> F["build_messages(context)<br/>事件流 → messages 数组"]
-//!     F --> G["构造 ChatCompletionRequest<br/>model + messages + tools"]
+//!     F --> F1["触发 BeforeLlmCallback<br/>（返回 Some 则短路）"]
+//!     F1 --> F2{"短路 ?"}
+//!     F2 -- "是" --> F3["直接使用短路内容作为最终答案"]
+//!     F2 -- "否" --> G["构造 ChatCompletionRequest<br/>model + messages + tools"]
 //!     G --> H["调用 LLM（指数退避重试 ≤ 3 次）"]
 //!     H --> I["累加 token 用量<br/>context.usage.add(...)"]
-//!     I --> J["取 choices[0].message"]
+//!     I --> I1["触发 AfterLlmCallback<br/>（可覆盖返回文本）"]
+//!     I1 --> J["取 choices[0].message"]
 //!     J --> K{"消息里有 tool_calls ?"}
 //!
 //!     K -- "是（普通 run）" --> L["record_tool_calls<br/>写 assistant 事件"]
@@ -41,6 +54,27 @@
 //!     K -- "否（普通 run 才有）" --> R["取 message.content 作为最终答案"]
 //!     R --> S["写 assistant 事件 + final_result"]
 //!     S --> T["返回 AgentResult"]
+//!     Q --> U["触发 OnTaskEndCallback<br/>（成功/失败都会触发）"]
+//!     T --> U
+//!     E1 --> U
+//! ```
+//!
+//! # 单次模型调用内部流程图
+//!
+//! ```mermaid
+//! flowchart TD
+//!     L0["构造 ChatCompletionRequest"] --> L1["触发 BeforeLlmCallback"]
+//!     L1 --> L2{"回调返回 Some(content) ?"}
+//!     L2 -- "是" --> L3["ShortCircuit(content)<br/>跳过 HTTP 请求"]
+//!     L2 -- "否" --> L4["发起请求（指数退避重试 ≤ 3 次）"]
+//!     L4 --> L5["累加 token 用量"]
+//!     L5 --> L6["触发 AfterLlmCallback"]
+//!     L6 --> L7{"回调返回 Some(content) ?"}
+//!     L7 -- "是" --> L8["覆盖 response 中的文本内容"]
+//!     L7 -- "否" --> L9["沿用原响应"]
+//!     L8 --> L10["返回 Response"]
+//!     L9 --> L10
+//!     L3 --> L10
 //! ```
 //!
 //! # 单次工具调用内部流程图
@@ -101,14 +135,18 @@ use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
     ChatCompletionRequestUserMessageArgs, ChatCompletionTool, ChatCompletionToolChoiceOption,
-    ChatCompletionTools, CreateChatCompletionRequestArgs, FunctionCall, FunctionObjectArgs,
-    ToolChoiceOptions,
+    ChatCompletionTools, CreateChatCompletionRequest, CreateChatCompletionRequestArgs,
+    FunctionCall, FunctionObjectArgs, ToolChoiceOptions,
 };
 use backon::{ExponentialBuilder, Retryable};
 use serde_json::Value;
+use std::time::Instant;
 
 use crate::{
-    agent::callback::{AfterToolCallback, BeforeToolCallback, ToolCallView},
+    agent::callback::{
+        AfterLlmCallback, AfterToolCallback, BeforeLlmCallback, BeforeToolCallback, LlmRequestView,
+        LlmResponseView, OnTaskEndCallback, TaskOutcome, ToolCallView,
+    },
     tools::ToolBox,
 };
 
@@ -125,6 +163,17 @@ use super::{
 pub struct AgentResult {
     pub output: String,
     pub context: ExecutionContext,
+}
+
+/// 一次大模型调用的结果。
+///
+/// 区分「正常拿到响应」与「被模型调用前回调短路」两种情况，
+/// 让上层主循环能分别走「解析响应」与「直接使用短路内容」两条分支。
+enum LlmOutcome {
+    /// 正常返回的模型响应。
+    Response(async_openai::types::chat::CreateChatCompletionResponse),
+    /// 被「模型调用前」回调短路，直接给出最终内容。
+    ShortCircuit(String),
 }
 
 /// 结构化 Agent 一次执行结束后的结果。
@@ -152,6 +201,12 @@ pub struct Agent {
     before_tool_callbacks: Vec<Arc<dyn BeforeToolCallback>>,
     /// 工具执行后回调，按注册顺序依次尝试，任一返回 `Some` 即覆盖结果。
     after_tool_callbacks: Vec<Arc<dyn AfterToolCallback>>,
+    /// 大模型调用前回调，按注册顺序依次尝试，任一返回 `Some` 即短路本次模型调用。
+    before_llm_callbacks: Vec<Arc<dyn BeforeLlmCallback>>,
+    /// 大模型调用后回调，按注册顺序依次尝试，任一返回 `Some` 即覆盖模型返回的文本。
+    after_llm_callbacks: Vec<Arc<dyn AfterLlmCallback>>,
+    /// 任务结束回调，任务正常或异常结束时都会触发一次。
+    on_task_end_callbacks: Vec<Arc<dyn OnTaskEndCallback>>,
 }
 
 impl Agent {
@@ -173,6 +228,9 @@ impl Agent {
             max_steps: 10,
             before_tool_callbacks: Vec::new(),
             after_tool_callbacks: Vec::new(),
+            before_llm_callbacks: Vec::new(),
+            after_llm_callbacks: Vec::new(),
+            on_task_end_callbacks: Vec::new(),
         }
     }
 
@@ -194,6 +252,26 @@ impl Agent {
         self
     }
 
+    /// 注册一个「大模型调用前」回调，可多次调用以注册多个。
+    pub fn with_before_llm_callback(mut self, callback: Arc<dyn BeforeLlmCallback>) -> Self {
+        self.before_llm_callbacks.push(callback);
+        self
+    }
+
+    /// 注册一个「大模型调用后」回调，可多次调用以注册多个。
+    pub fn with_after_llm_callback(mut self, callback: Arc<dyn AfterLlmCallback>) -> Self {
+        self.after_llm_callbacks.push(callback);
+        self
+    }
+
+    /// 注册一个「任务结束」回调，可多次调用以注册多个。
+    ///
+    /// 该回调在任务**正常结束或异常结束**时都会触发一次。
+    pub fn with_on_task_end_callback(mut self, callback: Arc<dyn OnTaskEndCallback>) -> Self {
+        self.on_task_end_callbacks.push(callback);
+        self
+    }
+
     /// 运行一次非结构化的 Agent 会话。
     ///
     /// 循环语义：
@@ -202,6 +280,8 @@ impl Agent {
     /// 3. 若模型返回纯文本内容，则认为这是最终答案，记录事件并返回。
     ///
     /// `max_steps` 用尽仍未拿到最终答案时返回错误。
+    ///
+    /// 无论成功还是失败，注册的 [`OnTaskEndCallback`] 都会被触发一次。
     pub async fn run(&self, user_input: &str) -> anyhow::Result<AgentResult> {
         // 每次运行都创建一份全新的执行上下文：包含本次执行的 UUID、事件流、步数、状态与用量。
         let mut context = ExecutionContext::new();
@@ -216,9 +296,39 @@ impl Agent {
             }],
         ));
 
-        // OpenAI 兼容客户端；base_url / api_key 从环境变量读取。
-        let client = async_openai::Client::new();
+        // 主循环：模型 ⇄ 工具 交替执行。结果用 `Result` 承载，便于区分成功/失败并触发任务结束回调。
+        let outcome = self.run_loop(&mut context).await;
 
+        match outcome {
+            Ok(output) => {
+                // 任务正常结束：触发任务结束回调，回调可覆盖最终输出。
+                let output = self
+                    .trigger_task_end(&context, &TaskOutcome::Success)
+                    .await
+                    .unwrap_or(output);
+                // 若回调改写了输出，同步更新上下文里的 final_result，保持一致。
+                context.final_result = Some(output.clone());
+                Ok(AgentResult { output, context })
+            },
+            Err(err) => {
+                // 任务异常结束：同样触发任务结束回调，让调用方能记录失败原因。
+                self.trigger_task_end(
+                    &context,
+                    &TaskOutcome::Failure {
+                        error: err.to_string(),
+                    },
+                )
+                .await;
+                Err(err)
+            },
+        }
+    }
+
+    /// 非结构化模式的主循环（从 [`Agent::run`] 中抽出，便于统一处理错误）。
+    ///
+    /// 每轮流程：构建消息 → 触发「模型调用前」回调 → 调用模型（含重试）→
+    /// 触发「模型调用后」回调 → 有 tool_calls 则执行工具，否则产出最终答案。
+    async fn run_loop(&self, context: &mut ExecutionContext) -> anyhow::Result<String> {
         // 从工具箱收集所有工具的 JSON Schema 定义，随每次请求一起下发给模型。
         // 某个工具定义构造失败时只跳过该工具并告警，不影响整体运行。
         let tool_definitions: Vec<ChatCompletionTools> = self
@@ -233,7 +343,6 @@ impl Agent {
             })
             .collect();
 
-        // 主循环：模型 ⇄ 工具 交替执行。
         loop {
             // 步数上限检查。注意判断在进入循环前，因此实际最多执行 max_steps 次模型调用。
             if context.current_step >= self.max_steps {
@@ -244,7 +353,7 @@ impl Agent {
             }
 
             // 把上下文里的事件转换为 OpenAI 兼容的 messages 数组。
-            let messages = self.build_messages(&context)?;
+            let messages = self.build_messages(context)?;
 
             // 组装请求：模型名 + 消息 + 工具定义 + 最大输出 token。
             let request = CreateChatCompletionRequestArgs::default()
@@ -254,55 +363,59 @@ impl Agent {
                 .max_tokens(2048u32)
                 .build()?;
 
-            // 网络请求带指数退避重试，最多重试 3 次；request 需要 clone 供多次尝试使用。
-            let response = (|| async { client.chat().create(request.clone()).await })
-                .retry(ExponentialBuilder::default().with_max_times(3))
-                .await?;
+            // 调用模型（内部会触发 before/after llm 回调，并累加 token 用量）。
+            let outcome = self.call_llm(context, request).await?;
 
-            // 累加 token 用量，便于统计整轮执行的成本。
-            if let Some(usage) = &response.usage {
-                context.usage.add(
-                    usage.prompt_tokens,
-                    usage.completion_tokens,
-                    usage.total_tokens,
-                );
-            }
+            match outcome {
+                // 「模型调用前」回调短路：直接把它给的内容当作最终答案。
+                LlmOutcome::ShortCircuit(content) => {
+                    context.add_event(Event::new(
+                        context.execution_id.clone(),
+                        "agent",
+                        vec![ContentItem::Message {
+                            role: "assistant".to_string(),
+                            content: content.clone(),
+                        }],
+                    ));
+                    context.final_result = Some(content.clone());
+                    return Ok(content);
+                },
+                // 正常拿到模型响应。
+                LlmOutcome::Response(response) => {
+                    // 取第一个 choice 的消息（贪心解码场景下只有一个候选）。
+                    let message = response
+                        .choices
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("No choices in response"))?
+                        .message;
 
-            // 取第一个 choice 的消息（贪心解码场景下只有一个候选）。
-            let message = response
-                .choices
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("No choices in response"))?
-                .message;
+                    // 分支一：模型请求调用工具。
+                    if let Some(tool_calls) = message.tool_calls {
+                        // 先把「工具调用请求」记录进上下文（assistant 事件）。
+                        self.record_tool_calls(context, &tool_calls);
+                        // 执行工具（内部会触发 before/after 回调），并把结果写入上下文。
+                        self.execute_tool_calls(context, &tool_calls).await;
+                    } else {
+                        // 分支二：模型直接给出文本 —— 视为最终答案。
+                        let content = message
+                            .content
+                            .ok_or_else(|| anyhow::anyhow!("No content in final response"))?;
 
-            // 分支一：模型请求调用工具。
-            if let Some(tool_calls) = message.tool_calls {
-                // 先把「工具调用请求」记录进上下文（assistant 事件）。
-                self.record_tool_calls(&mut context, &tool_calls);
-                // 执行工具（内部会触发 before/after 回调），并把结果写入上下文。
-                self.execute_tool_calls(&mut context, &tool_calls).await;
-            } else {
-                // 分支二：模型直接给出文本 —— 视为最终答案。
-                let content = message
-                    .content
-                    .ok_or_else(|| anyhow::anyhow!("No content in final response"))?;
-
-                // 记录 assistant 事件。
-                context.add_event(Event::new(
-                    context.execution_id.clone(),
-                    "agent",
-                    vec![ContentItem::Message {
-                        role: "assistant".to_string(),
-                        content: content.clone(),
-                    }],
-                ));
-                // 同时写入 final_result 字段，便于外部直接读取最终答案。
-                context.final_result = Some(content.clone());
-                return Ok(AgentResult {
-                    output: content,
-                    context,
-                });
+                        // 记录 assistant 事件。
+                        context.add_event(Event::new(
+                            context.execution_id.clone(),
+                            "agent",
+                            vec![ContentItem::Message {
+                                role: "assistant".to_string(),
+                                content: content.clone(),
+                            }],
+                        ));
+                        // 同时写入 final_result 字段，便于外部直接读取最终答案。
+                        context.final_result = Some(content.clone());
+                        return Ok(content);
+                    }
+                },
             }
 
             // 本轮结束，步数 +1，进入下一轮。
@@ -319,6 +432,8 @@ impl Agent {
     ///
     /// 约束：`T` 必须实现 `schemars::JsonSchema`（用于生成 schema）与 `serde::de::DeserializeOwned`
     /// （用于反序列化结果）。
+    ///
+    /// 无论成功还是失败，注册的 [`OnTaskEndCallback`] 都会被触发一次。
     pub async fn run_structured<T>(
         &self,
         user_input: &str,
@@ -339,8 +454,50 @@ impl Agent {
             }],
         ));
 
-        let client = async_openai::Client::new();
+        // 主循环，结果用 Result 承载，便于区分成功/失败并触发任务结束回调。
+        let outcome = self.run_structured_loop::<T>(&mut context).await;
 
+        match outcome {
+            Ok(output) => {
+                // 任务正常结束：触发任务结束回调。
+                // 回调返回新内容时会尝试反序列化为 T；失败则保留原输出。
+                let output = match self.trigger_task_end(&context, &TaskOutcome::Success).await {
+                    Some(raw) => match serde_json::from_str::<T>(&raw) {
+                        Ok(parsed) => parsed,
+                        Err(e) => {
+                            tracing::warn!(
+                                "OnTaskEndCallback returned content that is not valid for the \
+                                 expected schema, keeping the original output: {e}"
+                            );
+                            output
+                        },
+                    },
+                    None => output,
+                };
+                Ok(StructuredAgentResult { output, context })
+            },
+            Err(err) => {
+                // 任务异常结束：同样触发任务结束回调，让调用方能记录失败原因。
+                self.trigger_task_end(
+                    &context,
+                    &TaskOutcome::Failure {
+                        error: err.to_string(),
+                    },
+                )
+                .await;
+                Err(err)
+            },
+        }
+    }
+
+    /// 结构化模式的主循环（从 [`Agent::run_structured`] 中抽出）。
+    ///
+    /// 与 [`Agent::run_loop`] 的差异：请求强制带上 `tool_choice = required`，
+    /// 并且额外注入了 `final_answer` 工具；当模型调用该工具时即视为产出最终答案。
+    async fn run_structured_loop<T>(&self, context: &mut ExecutionContext) -> anyhow::Result<T>
+    where
+        T: schemars::JsonSchema + serde::de::DeserializeOwned,
+    {
         // 收集普通工具定义。
         let mut tool_definitions: Vec<ChatCompletionTools> = self
             .toolbox
@@ -365,7 +522,7 @@ impl Agent {
                 );
             }
 
-            let messages = self.build_messages(&context)?;
+            let messages = self.build_messages(context)?;
 
             // 与 run 的差别：设置 tool_choice = Required，强制模型必须返回工具调用。
             let request = CreateChatCompletionRequestArgs::default()
@@ -378,19 +535,28 @@ impl Agent {
                 .max_tokens(2048u32)
                 .build()?;
 
-            // 同样的指数退避重试策略。
-            let response = (|| async { client.chat().create(request.clone()).await })
-                .retry(ExponentialBuilder::default().with_max_times(3))
-                .await?;
+            // 调用模型（内部会触发 before/after llm 回调，并累加 token 用量）。
+            let outcome = self.call_llm(context, request).await?;
 
-            // 累加 token 用量。
-            if let Some(usage) = &response.usage {
-                context.usage.add(
-                    usage.prompt_tokens,
-                    usage.completion_tokens,
-                    usage.total_tokens,
-                );
-            }
+            // 「模型调用前」回调短路：把内容当作 final_answer 的结果直接解析。
+            let response = match outcome {
+                LlmOutcome::ShortCircuit(content) => {
+                    let parsed: T = serde_json::from_str(&content)?;
+                    context.add_event(Event::new(
+                        context.execution_id.clone(),
+                        "tool",
+                        vec![ContentItem::ToolResult {
+                            tool_call_id: "short_circuit".to_string(),
+                            name: "final_answer".to_string(),
+                            status: ToolResultStatus::Success,
+                            content: content.clone(),
+                        }],
+                    ));
+                    context.final_result = Some(content);
+                    return Ok(parsed);
+                },
+                LlmOutcome::Response(response) => response,
+            };
 
             let message = response
                 .choices
@@ -405,7 +571,7 @@ impl Agent {
             })?;
 
             // 记录工具调用事件。
-            self.record_tool_calls(&mut context, &tool_calls);
+            self.record_tool_calls(context, &tool_calls);
 
             // 在本轮所有工具调用中查找 `final_answer`。
             let final_call = tool_calls.iter().find_map(|tool_call| match tool_call {
@@ -436,16 +602,121 @@ impl Agent {
                 ));
                 context.final_result = Some(raw_arguments);
 
-                return Ok(StructuredAgentResult {
-                    output: parsed,
-                    context,
-                });
+                return Ok(parsed);
             }
 
             // 否则视为普通的工具调用，执行后进入下一轮。
-            self.execute_tool_calls(&mut context, &tool_calls).await;
+            self.execute_tool_calls(context, &tool_calls).await;
             context.increment_step();
         }
+    }
+
+    /// 调用一次大模型，并在调用前后触发对应的回调。
+    ///
+    /// 流程：
+    /// 1. 触发「模型调用前」回调；任一回调返回 `Some(content)` 即短路，
+    ///    直接把 `content` 当作模型回复，不再发起 HTTP 请求；
+    /// 2. 发起请求（指数退避重试最多 3 次），并累加 token 用量；
+    /// 3. 触发「模型调用后」回调；任一回调返回 `Some(content)` 即用它覆盖
+    ///    模型返回的文本内容（不影响工具调用请求）。
+    ///
+    /// 返回值 [`LlmOutcome::ShortCircuit`] 表示被前置回调短路，
+    /// [`LlmOutcome::Response`] 表示正常拿到模型响应。
+    async fn call_llm(
+        &self,
+        context: &mut ExecutionContext,
+        request: CreateChatCompletionRequest,
+    ) -> anyhow::Result<LlmOutcome> {
+        // 第一步：模型调用前回调。任一回调返回 Some 即短路本次调用。
+        let request_view = LlmRequestView {
+            model: &request.model,
+            messages: &request.messages,
+            step: context.current_step,
+        };
+        for callback in &self.before_llm_callbacks {
+            if let Some(content) = callback.call(context, request_view).await {
+                tracing::info!("BeforeLlmCallback short-circuited the model call");
+                return Ok(LlmOutcome::ShortCircuit(content));
+            }
+        }
+
+        // 第二步：真正发起请求。OpenAI 兼容客户端；base_url / api_key 从环境变量读取。
+        let client = async_openai::Client::new();
+        // 记录开始时间，用于在「模型调用后」回调中提供耗时。
+        let started_at = Instant::now();
+        // 网络请求带指数退避重试，最多重试 3 次；request 需要 clone 供多次尝试使用。
+        let response = (|| async { client.chat().create(request.clone()).await })
+            .retry(ExponentialBuilder::default().with_max_times(3))
+            .await?;
+        let elapsed = started_at.elapsed();
+
+        // 累加 token 用量，便于统计整轮执行的成本。
+        let usage = response.usage.clone();
+        if let Some(usage) = &usage {
+            context.usage.add(
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+            );
+        }
+
+        // 第三步：模型调用后回调。任一回调返回 Some 即覆盖模型返回的文本内容。
+        // 回调里需要拿到「覆盖后的内容」，因此先把响应里的文本与工具调用拆出来。
+        let (raw_content, tool_calls) = response
+            .choices
+            .first()
+            .map(|choice| {
+                (
+                    choice.message.content.clone(),
+                    choice.message.tool_calls.clone().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_else(|| (None, Vec::new()));
+
+        let response_view = LlmResponseView {
+            model: &response.model,
+            content: raw_content.as_deref(),
+            tool_calls: &tool_calls,
+            prompt_tokens: usage.as_ref().map_or(0, |u| u.prompt_tokens),
+            completion_tokens: usage.as_ref().map_or(0, |u| u.completion_tokens),
+            total_tokens: usage.as_ref().map_or(0, |u| u.total_tokens),
+            elapsed,
+        };
+
+        let mut overridden_content = None;
+        for callback in &self.after_llm_callbacks {
+            if let Some(content) = callback.call(context, response_view).await {
+                overridden_content = Some(content);
+                break;
+            }
+        }
+
+        // 把可能被回调覆盖的文本写回响应对象，供上层分支判断。
+        let mut response = response;
+        if let (Some(content), Some(choice)) = (overridden_content, response.choices.first_mut()) {
+            choice.message.content = Some(content);
+        }
+
+        Ok(LlmOutcome::Response(response))
+    }
+
+    /// 触发所有「任务结束」回调。
+    ///
+    /// 按注册顺序依次调用，任一回调返回 `Some(content)` 即以其作为覆盖内容并停止后续回调。
+    /// 回调本身 panic 不会影响主流程的错误传播。
+    async fn trigger_task_end(
+        &self,
+        context: &ExecutionContext,
+        outcome: &TaskOutcome,
+    ) -> Option<String> {
+        let mut overridden = None;
+        for callback in &self.on_task_end_callbacks {
+            if let Some(content) = callback.call(context, outcome).await {
+                overridden = Some(content);
+                break;
+            }
+        }
+        overridden
     }
 
     /// 把本轮的「工具调用请求」记录为一条 assistant 事件。
