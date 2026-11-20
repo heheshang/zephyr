@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::{
     agent::{
         callback::{AfterToolCallback, BeforeToolCallback, ToolCallView},
-        llm_request::{self, BeforeLlmCallback, LlmRequest},
+        llm_request::{BeforeLlmCallback, LlmRequest},
     },
     tools::ToolBox,
 };
