@@ -38,6 +38,10 @@ path = "examples/search_web.rs"
 name = "test_compression"
 path = "examples/test_compression.rs"
 
+[[example]]
+name = "test_context_optimizer"
+path = "examples/test_context_optimizer.rs"
+
 [[bin]]
 name = "zephyr_mcp_server"
 path = "src/bin/zephyr_mcp_server.rs"
