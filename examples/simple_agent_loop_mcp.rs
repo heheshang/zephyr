@@ -83,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
 所有价格和消费数据必须来自工具。
 不要自己猜测数据。",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");
@@ -94,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         Some(&system_prompt),
         "我七月在 Food 这个分类上一共花了多少钱？",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");
@@ -105,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         Some(&system_prompt),
         "帮我记一笔支出：今天在星巴克买咖啡花了 28 块钱，分类是 Food。然后在帮我统计一下七月份在food这个分类上的开销。",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");
@@ -119,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
         Some(&system_prompt),
         "帮我总结一下七月的费用情况，按分类列出来。",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");

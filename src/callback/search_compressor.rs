@@ -124,6 +124,7 @@ impl AfterToolCallback for SearchCompressorCallback {
 /// - `None`：没有匹配的 `ToolCall`，或该调用没有 `query` 字段 / 该字段不是字符串。
 fn extract_query(context: &ExecutionContext, tool_call_id: &str) -> Option<String> {
     context
+        .session
         .events
         .iter()
         // 扁平化每个事件里的多个 content 项，得到一条 `ContentItem` 迭代流。

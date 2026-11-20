@@ -42,6 +42,10 @@ path = "examples/test_compression.rs"
 name = "test_context_optimizer"
 path = "examples/test_context_optimizer.rs"
 
+[[example]]
+name = "multi_ran_agent"
+path = "examples/multi_ran_agent.rs"
+
 [[bin]]
 name = "zephyr_mcp_server"
 path = "src/bin/zephyr_mcp_server.rs"

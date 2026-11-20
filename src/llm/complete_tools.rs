@@ -4,7 +4,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestUserMessageArgs, ChatCompletionTools, CreateChatCompletionRequestArgs,
 };
 
-use crate::{agent::context::ExecutionContext, tools::ToolBox};
+use crate::{agent::context::ExecutionContext, session::model::Session, tools::ToolBox};
 
 /// 单次对话允许的最大工具调用轮次，避免模型陷入死循环。
 const MAX_TOOL_ROUNDS: usize = 8;
@@ -21,7 +21,9 @@ pub async fn chat_complete(
     system: Option<&str>,
     prompt: &str,
     toolbox: &ToolBox,
+    session_id: &str,
 ) -> anyhow::Result<String> {
+    let session = Session::new(session_id.to_string(), None);
     let client = async_openai::Client::new();
     let mut messages = build_messages(system, prompt)?;
     let tool_definitions = collect_tool_definitions(toolbox);
@@ -60,7 +62,7 @@ pub async fn chat_complete(
                 let arguments = &function_call.function.arguments;
                 tracing::info!("function_name: {function_name}, arguments: {arguments}");
 
-                let tool_result = execute_tool(toolbox, function_name, arguments).await;
+                let tool_result = execute_tool(toolbox, function_name, arguments, &session).await;
 
                 messages.push(
                     ChatCompletionRequestToolMessageArgs::default()
@@ -79,14 +81,19 @@ pub async fn chat_complete(
 }
 
 /// 执行单个工具调用，把成功结果或错误信息都转成可回灌给模型的文本。
-async fn execute_tool(toolbox: &ToolBox, function_name: &str, arguments: &str) -> String {
+async fn execute_tool(
+    toolbox: &ToolBox,
+    function_name: &str,
+    arguments: &str,
+    session: &Session,
+) -> String {
     let Some(tool) = toolbox.get(function_name) else {
         let msg = format!("tool not found: {function_name}");
         tracing::error!("{msg}");
         return msg;
     };
-    let mut context = ExecutionContext::new();
-    match tool.execute(arguments, &mut context).await {
+    let context = ExecutionContext::new(session.clone());
+    match tool.execute(arguments, &context).await {
         Ok(result) => {
             tracing::info!("tool_result: {result}");
             result

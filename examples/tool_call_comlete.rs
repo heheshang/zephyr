@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
         Some(system_prompt),
         "2026年世界杯决赛的比分是多少？",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");
@@ -39,6 +40,7 @@ async fn main() -> Result<()> {
         Some(system_prompt),
         "123456789 乘以 987654321 等于多少？",
         &toolbox,
+        "1234567890",
     )
     .await?;
     println!("回答: {result}");

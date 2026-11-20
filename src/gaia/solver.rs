@@ -88,8 +88,9 @@ pub async fn solve_problem_with_tools(
     system: &str,
     prompt: &str,
     toolbox: Arc<ToolBox>,
+    session_id: &str,
 ) -> anyhow::Result<GaiaOutput> {
     let agent = Agent::new(model, Some(system), toolbox).with_max_steps(8);
-    let result = agent.run_structured(prompt).await?;
+    let result = agent.run_structured(prompt, session_id).await?;
     Ok(result.output)
 }

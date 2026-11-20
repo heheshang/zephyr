@@ -49,7 +49,9 @@ pub async fn gaia_level1_experiment() -> Result<()> {
         set.spawn(async move {
             let permit = get_semaphore().acquire().await;
             // let eval = evaluate_gaia_single(problem.clone(), QWEN_MODEL).await;
-            let eval = evaluate_gaia_single_with_tools(problem.clone(), QWEN_MODEL, toolbox).await;
+            let eval =
+                evaluate_gaia_single_with_tools(problem.clone(), QWEN_MODEL, toolbox, "1234567890")
+                    .await;
             tracing::info!("{eval:#?}");
             drop(permit);
             Ok::<_, anyhow::Error>(("with_tools", eval))

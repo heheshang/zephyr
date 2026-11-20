@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use zephyr::{
     agent::runtime::Agent, callback::search_compressor::SearchCompressorCallback,
-    constant::QWEN_MODEL, tools::build_toolbox,
+    constant::QWEN_MODEL, session::manager::InMemorySessionManager, tools::build_toolbox,
 };
 
 #[tokio::main]
@@ -20,9 +20,12 @@ async fn main() -> anyhow::Result<()> {
         toolbox,
     )
     .with_max_steps(5)
-    .with_after_tool_callback(Arc::new(SearchCompressorCallback));
+    .with_after_tool_callback(Arc::new(SearchCompressorCallback))
+    .with_session_manager(InMemorySessionManager::new());
 
-    let result = agent.run("2026世界人工智能大会 WAIC 有什么亮点？").await?;
+    let result = agent
+        .run("2026世界人工智能大会 WAIC 有什么亮点？", "1234567890")
+        .await?;
     println!("\n最终回答: {}", result.output);
 
     Ok(())

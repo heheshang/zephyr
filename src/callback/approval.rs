@@ -48,7 +48,7 @@ impl BeforeToolCallback for ApprovalCallback {
         tool_call: ToolCallView<'_>,
     ) -> Option<String> {
         // 非高危工具：直接放行，不打断模型的多轮工具循环。
-        if !self.dangerous_tools.contains(&tool_call.name.to_string()) {
+        if !self.dangerous_tools.contains(tool_call.name) {
             return None;
         }
 

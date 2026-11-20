@@ -56,7 +56,9 @@ pub async fn evaluate_gaia_single_with_tools(
     problem: GaiaRow,
     model: &str,
     toolbox: Arc<ToolBox>,
+    session_id: &str,
 ) -> GaiaEvalResult {
-    let result = solve_problem_with_tools(model, GAIA_PROMPT, &problem.question, toolbox).await;
+    let result =
+        solve_problem_with_tools(model, GAIA_PROMPT, &problem.question, toolbox, session_id).await;
     to_eval_result(problem, model, result)
 }

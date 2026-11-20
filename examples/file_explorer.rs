@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
             r#"读一下这个压缩包里的候选人信息和职位要求，判断出最合适的候选人。
 确认完之后，把 job_description.txt 删掉，因为信息已经用完了，不需要再占地方。
 压缩包路径：/Users/shang/Documents/workspace/personal/ai/rs-work/Zephyr/candidates.zip"#,
+            "1234567890",
         )
         .await?;
 
@@ -50,7 +51,7 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "\n本次执行一共走了 {} 步，记录了 {} 条 Event",
         result.context.current_step,
-        result.context.events.len()
+        result.context.session.events.len()
     );
 
     Ok(())

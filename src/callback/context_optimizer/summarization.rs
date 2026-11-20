@@ -95,6 +95,7 @@ impl Summarization {
 
         // 3) 读取上次的摘要边界；没有记录时从 user 消息之后开始（即摘要全部中间历史）。
         let last_summary_idx = context
+            .session
             .state
             .get("last_summary_idx")
             .and_then(Value::as_u64)
@@ -120,6 +121,7 @@ impl Summarization {
 
         // 6) 与上一轮摘要拼接，形成累积摘要。
         let existing_summary = context
+            .session
             .state
             .get("context_summary")
             .and_then(Value::as_str)
@@ -134,11 +136,16 @@ impl Summarization {
 
         // 7) 移除被摘要的原文区间，并更新状态标记。
         request.contents.drain((user_idx + 1)..summary_end);
-        context.state.insert(
+        context.session.state.insert(
+            "last_summary_idx".to_string(),
+            Value::from((summary_end - 1) as u64),
+        );
+        context.session.state.insert(
             "last_summary_idx".to_string(),
             Value::from((summary_end - 1) as u64),
         );
         context
+            .session
             .state
             .insert("context_summary".to_string(), Value::String(full_summary));
 

@@ -66,7 +66,7 @@ impl OnTaskEndCallback for TaskSummaryCallback {
             "✅ 任务完成 | execution_id={} | steps={} | events={} | tokens(prompt/completion/total)={}/{}/{} | 结果={}",
             context.execution_id,
             context.current_step,
-            context.events.len(),
+            context.session.events.len(),
             context.usage.prompt_tokens,
             context.usage.completion_tokens,
             context.usage.total_tokens,
