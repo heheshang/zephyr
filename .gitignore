@@ -1,6 +1,8 @@
 /target
 .env
-/.cursor
-sse_out.log
-.cursor
-candidates
+/gaia_cache
+libpdfium.so
+*.db
+*.db-wal
+*.db-shm
+*.db-journal

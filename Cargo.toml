@@ -1,103 +1,38 @@
 [package]
-name = "zephyr"
+name = "study-agent"
 version = "0.1.0"
 edition = "2024"
-default-run = "main"
-
-[[bin]]
-name = "main"
-path = "src/main.rs"
-
-[[example]]
-name = "stream_chat"
-path = "examples/stream_chat.rs"
-
-[[example]]
-name = "structured_chat"
-path = "examples/structured_chat.rs"
-
-
-[[example]]
-name = "tool_call_comlete"
-path = "examples/tool_call_comlete.rs"
-[[example]]
-name = "simple_agent_loop"
-path = "examples/simple_agent_loop.rs"
-
-[[example]]
-name = "agent_run"
-path = "examples/agent_run.rs"
-
-[[example]]
-name = "agent_run_structured"
-path = "examples/agent_run_structured.rs"
-
-[[example]]
-name = "file_explorer"
-path = "examples/file_explorer.rs"
-[[example]]
-name = "search_web"
-path = "examples/search_web.rs"
-
-[[example]]
-name = "test_compression"
-path = "examples/test_compression.rs"
-
-[[example]]
-name = "test_context_optimizer"
-path = "examples/test_context_optimizer.rs"
-
-[[example]]
-name = "multi_ran_agent"
-path = "examples/multi_ran_agent.rs"
-
-
-[[bin]]
-name = "zephyr_mcp_server"
-path = "src/bin/zephyr_mcp_server.rs"
-
-[[bin]]
-name = "gaia"
-path = "src/bin/gaia.rs"
-
+default-run = "study-agent"
 
 [dependencies]
 anyhow = "1.0.104"
-async-openai = { version = "0.43.0", features = [
-    "embedding",
-    "chat-completion",
-] }
-async-stream = "0.3.6"
+async-openai = { version = "0.42.0", features = ["chat-completion", "embedding"] }
 async-trait = "0.1.92"
 backon = "1.6.0"
 base64 = "0.23.1"
-calamine = "0.38.0"
+calamine = "0.36.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 csv = "1.4.0"
-dotenvy = "0.15.0"
-eventsource-stream = "0.2"
-futures = "0.3.34"
+dotenv = "0.15.0"
 image = "0.25.10"
 pdfium-render = "0.9.4"
 reqwest = { version = "0.13.5", features = ["json"] }
-rmcp = { version = "3.10.0", features = [
+rmcp = { version = "3.4.0", features = [
     "client",
     "server",
     "macros",
     "transport-child-process",
     "transport-io",
 ] }
-rusqlite = { version = "0.43.0", features = ["bundled"] }
+rusqlite = { version ="0.40.2", features = ["bundled"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tempfile = "3.27.0"
-termimad = "0.35.5"
 thiserror = "2.0.20"
 tiktoken-rs = "0.12.1"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-subscriber = "0.3.23"
 urlencoding = "2.1.3"
-uuid = { version = "1.29.2", features = ["v4"] }
-zip = "9.6.0"
+uuid = { version = "1.26.1", features = ["v4"] }
+zip = "8.6.0"
