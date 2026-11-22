@@ -2,6 +2,11 @@
 name = "zephyr"
 version = "0.1.0"
 edition = "2024"
+default-run = "main"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
 
 [[example]]
 name = "stream_chat"
@@ -45,6 +50,7 @@ path = "examples/test_context_optimizer.rs"
 [[example]]
 name = "multi_ran_agent"
 path = "examples/multi_ran_agent.rs"
+
 
 [[bin]]
 name = "zephyr_mcp_server"

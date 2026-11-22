@@ -1,5 +1,6 @@
-use anyhow::Result;
 use std::{cmp::Ordering, collections::BinaryHeap};
+
+use anyhow::Result;
 
 use crate::{
     constant::QWEN_EMBEDDING_MODEL,

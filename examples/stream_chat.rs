@@ -2,8 +2,10 @@ use anyhow::Result;
 use tokio::task::JoinSet;
 use tracing::{Instrument, Level};
 use tracing_subscriber::FmtSubscriber;
-use zephyr::llm::get_semaphore;
-use zephyr::{constant::QWEN_MODEL, llm::chat_stream_with_retry};
+use zephyr::{
+    constant::QWEN_MODEL,
+    llm::{chat_stream_with_retry, get_semaphore},
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {

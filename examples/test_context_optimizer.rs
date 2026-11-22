@@ -23,9 +23,9 @@ async fn run_demo(
         .with_max_steps(8)
         .with_before_llm_callback(callback);
 
-    let result = agent.run(QUERY, "1234567890").await?;
+    let result = agent.run(Some(QUERY), "1234567890", None).await?;
 
-    println!("\n最终回答: {}", result.output);
+    println!("\n最终回答: {:?}", result.output);
     println!("累计消耗 tokens: {}", result.context.usage.total_tokens);
 
     Ok(())

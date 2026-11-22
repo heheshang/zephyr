@@ -13,6 +13,18 @@ pub trait Tool: Send + Sync {
 
     async fn execute(&self, args_json: &str, context: &ExecutionContext) -> anyhow::Result<String>;
 
+    fn requires_confirmation(&self) -> bool {
+        false
+    }
+    fn confirmation_message_template(&self) -> &str {
+        "The agent wants to execute '{name}' with the arguments: {arguments}. Please confirm or reject this request."
+    }
+    fn get_confirmation_message(&self, arguments: &Value) -> String {
+        self.confirmation_message_template()
+            .replace("{name}", self.name())
+            .replace("{arguments}", &arguments.to_string())
+    }
+
     fn definition(&self) -> anyhow::Result<ChatCompletionTools> {
         let function = FunctionObjectArgs::default()
             .name(self.name())

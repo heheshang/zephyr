@@ -1,16 +1,12 @@
 use std::sync::Arc;
 
-use crate::agent::runtime::Agent;
-use crate::gaia::models::GaiaOutput;
-use crate::tools::ToolBox;
-use async_openai::types::chat::ChatCompletionRequestSystemMessageArgs;
-use async_openai::types::chat::ChatCompletionRequestUserMessageArgs;
-use async_openai::types::chat::CreateChatCompletionRequestArgs;
-use async_openai::types::chat::FinishReason;
-use async_openai::types::chat::ResponseFormat;
-use async_openai::types::chat::ResponseFormatJsonSchema;
-use backon::ExponentialBuilder;
-use backon::Retryable;
+use async_openai::types::chat::{
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+    CreateChatCompletionRequestArgs, FinishReason, ResponseFormat, ResponseFormatJsonSchema,
+};
+use backon::{ExponentialBuilder, Retryable};
+
+use crate::{agent::runtime::Agent, gaia::models::GaiaOutput, tools::ToolBox};
 
 pub const GAIA_PROMPT: &str = r#"You are a general AI assistant. I will ask you a question.
 First, determine if you can solve this problem with your current capabilities and set "is_solvable" accordingly.

@@ -24,9 +24,13 @@ async fn main() -> anyhow::Result<()> {
     .with_session_manager(InMemorySessionManager::new());
 
     let result = agent
-        .run("2026世界人工智能大会 WAIC 有什么亮点？", "1234567890")
+        .run(
+            Some("2026世界人工智能大会 WAIC 有什么亮点？"),
+            "1234567890",
+            None,
+        )
         .await?;
-    println!("\n最终回答: {}", result.output);
+    println!("\n最终回答: {:?}", result.output);
 
     Ok(())
 }

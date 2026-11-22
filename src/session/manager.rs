@@ -1,7 +1,5 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use anyhow::Ok;
-
 use crate::session::model::Session;
 
 #[async_trait::async_trait]

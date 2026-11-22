@@ -29,7 +29,6 @@
 //! 摘要区间同样受 [`find_safe_start`] 约束，不能切断 `tool_call` / `tool_result`
 //! 配对；并且第一条 user 消息永远不会被摘掉。
 
-use anyhow::Ok;
 use async_openai::types::chat::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
     CreateChatCompletionRequestArgs,
@@ -37,7 +36,11 @@ use async_openai::types::chat::{
 use serde_json::Value;
 
 use crate::{
-    agent::{ExecutionContext, event::ContentItem, llm_request::LlmRequest},
+    agent::{
+        ExecutionContext,
+        event::{ContentItem, ToolCall},
+        llm_request::LlmRequest,
+    },
     callback::context_optimizer::find_safe_start,
 };
 
@@ -216,9 +219,9 @@ fn format_history(items: &[ContentItem]) -> String {
                 format!("[{role}]: {preview}")
             },
             // 工具调用：保留完整名称与参数。
-            ContentItem::ToolCall {
+            ContentItem::ToolCall(ToolCall {
                 name, arguments, ..
-            } => {
+            }) => {
                 format!("[tool call]: {name}({arguments})")
             },
             // 工具结果：截断到 200 字符。

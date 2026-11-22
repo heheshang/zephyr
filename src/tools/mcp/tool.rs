@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::{
-    agent::context::ExecutionContext,
+    agent::ExecutionContext,
     tools::{mcp::client::McpClient, tool::Tool},
 };
 
@@ -16,6 +16,7 @@ pub struct McpTool {
     name: String,
     description: String,
     parameters: Value,
+    requires_confirmation: bool,
 }
 
 impl McpTool {
@@ -25,10 +26,12 @@ impl McpTool {
     /// 不能直接借用 rmcp::model::Tool 里 'static 的 Cow<str>。
     pub fn new(client: Arc<McpClient>, tool: rmcp::model::Tool) -> Self {
         let parameters = Value::Object((*tool.input_schema).clone());
+        let name = tool.name.to_string();
 
         Self {
             client,
-            name: tool.name.to_string(),
+            requires_confirmation: name == "delete_expense",
+            name,
             description: tool.description.map(|d| d.to_string()).unwrap_or_default(),
             parameters,
         }
@@ -47,6 +50,14 @@ impl Tool for McpTool {
 
     fn parameters(&self) -> Value {
         self.parameters.clone()
+    }
+
+    fn requires_confirmation(&self) -> bool {
+        self.requires_confirmation
+    }
+
+    fn confirmation_message_template(&self) -> &str {
+        "即将调用费用工具 '{name}'，参数为 {arguments}。这是不可逆操作，是否继续？"
     }
 
     async fn execute(

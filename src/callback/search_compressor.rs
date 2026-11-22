@@ -4,7 +4,7 @@ use crate::{
     agent::{
         callback::AfterToolCallback,
         context::ExecutionContext,
-        event::{ContentItem, ToolResultStatus},
+        event::{ContentItem, ToolCall, ToolResultStatus},
     },
     knowledge_base::{chunk::fixed_length_chunking, search::vector_search},
 };
@@ -132,11 +132,11 @@ fn extract_query(context: &ExecutionContext, tool_call_id: &str) -> Option<Strin
         // `find_map` 会在遇到第一个返回 `Some` 的元素时停止，
         // 因此这里的模式匹配同时起到「过滤 + 提取」两个作用。
         .find_map(|item| match item {
-            ContentItem::ToolCall {
+            ContentItem::ToolCall(ToolCall {
                 tool_call_id: id,
                 name,
                 arguments,
-            } if id == tool_call_id && name == "web_search" => arguments
+            }) if id == tool_call_id && name == "web_search" => arguments
                 // `arguments` 是 `serde_json::Value`，用 `get` 安全取键（不存在返回 None）。
                 .get("query")
                 // `as_str` 仅在值是 JSON 字符串时返回 `Some`，否则为 `None`。

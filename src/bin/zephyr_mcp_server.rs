@@ -1,6 +1,10 @@
-use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock};
-use rmcp::{ErrorData as McpError, ServiceExt, schemars, tool, tool_router, transport::stdio};
+use rmcp::{
+    ErrorData as McpError, ServiceExt,
+    handler::server::wrapper::Parameters,
+    model::{CallToolResult, ContentBlock},
+    schemars, tool, tool_router,
+    transport::stdio,
+};
 use serde::{Deserialize, Serialize};
 
 // ---------- 参数 / 请求体类型 ----------

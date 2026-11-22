@@ -29,7 +29,10 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::agent::{event::ContentItem, llm_request::LlmRequest};
+use crate::agent::{
+    event::{ContentItem, ToolCall},
+    llm_request::LlmRequest,
+};
 
 /// 内容压实优化器。
 pub struct Compaction {
@@ -59,11 +62,11 @@ impl Compaction {
         for (idx, item) in request.contents.iter_mut().enumerate() {
             match item {
                 // 记录工具调用及其参数。
-                ContentItem::ToolCall {
+                ContentItem::ToolCall(ToolCall {
                     tool_call_id,
+                    name: _,
                     arguments,
-                    ..
-                } => {
+                }) => {
                     call_args.insert(tool_call_id.clone(), arguments.clone());
                 },
                 // 处理工具结果：窗口外的、已知高噪音工具的结果正文被替换。

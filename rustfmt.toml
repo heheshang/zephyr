@@ -1,3 +1,14 @@
+# rustfmt 配置
+#
+# ⚠️ 重要：本文件中的 `imports_granularity`、`group_imports`、`fn_single_line`、
+# `match_arm_blocks`、`force_multiline_blocks` 均为 **nightly-only** 选项。
+# 它们只在 nightly 工具链下生效；在 stable 下 rustfmt 会打印
+# "unstable features are only available in nightly channel" 警告并**静默忽略**。
+#
+# 因此仓库根目录提供了 `rust-toolchain.toml` 将工具链固定为 nightly，
+# 保证 `cargo fmt` / `cargo clippy` 始终使用 nightly，配置不会悄悄降级。
+# 若要改回 stable，请同时移除 `rust-toolchain.toml` 并删除下列 nightly-only 选项。
+
 # 核心：指定风格版本，确保与 cargo fmt 行为一致
 style_edition = "2024"
 
@@ -11,9 +22,20 @@ newline_style = "Unix"
 use_field_init_shorthand = true # 使用 Point { x, y } 而非 Point { x: x, y: y }
 use_try_shorthand = true        # 使用 ? 运算符替代 try! 宏
 
-# 导入排序
+# ── 导入排序与分组 ────────────────────────────────────────────────
+# reorder_imports: 对同一分组内的 use 声明按字典序重排。
 reorder_imports = true
 reorder_modules = true
+
+# group_imports: 强制把导入分成三组，组间空一行，组内按字典序：
+#   1) std / core / alloc
+#   2) 第三方 crate
+#   3) 本 crate 内部路径（crate::、super::、self::）
+group_imports = "StdExternalCrate" # nightly-only
+
+# imports_granularity: 同一 crate 的多个导入合并成一个花括号列表，
+# 例如 `use serde::{Deserialize, Serialize};`，减少重复前缀。
+imports_granularity = "Crate" # nightly-only
 
 # 尾随逗号控制
 match_block_trailing_comma = true

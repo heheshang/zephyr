@@ -8,11 +8,7 @@ pub enum ContentItem {
     #[serde(rename = "message")]
     Message { role: String, content: String },
     #[serde(rename = "tool_call")]
-    ToolCall {
-        tool_call_id: String,
-        name: String,
-        arguments: Value,
-    },
+    ToolCall(ToolCall),
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_call_id: String,
@@ -20,6 +16,13 @@ pub enum ContentItem {
         status: ToolResultStatus,
         content: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub tool_call_id: String,
+    pub name: String,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

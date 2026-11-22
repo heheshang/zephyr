@@ -56,7 +56,7 @@ use std::collections::HashSet;
 use crate::{
     agent::{
         ExecutionContext,
-        event::ContentItem,
+        event::{ContentItem, ToolCall},
         llm_request::{BeforeLlmCallback, LlmRequest},
     },
     callback::context_optimizer::{compaction::Compaction, summarization::Summarization},
@@ -177,9 +177,9 @@ pub fn count_tokens(_model: &str, request: &LlmRequest) -> usize {
                 bpe.encode_ordinary(content).len()
             },
             // 工具调用：工具名 + 参数（JSON 文本）。
-            crate::agent::event::ContentItem::ToolCall {
+            crate::agent::event::ContentItem::ToolCall(ToolCall {
                 name, arguments, ..
-            } => {
+            }) => {
                 bpe.encode_ordinary(name).len()
                     + bpe.encode_ordinary(arguments.to_string().as_str()).len()
             },
@@ -235,7 +235,7 @@ fn find_safe_start(contents: &[ContentItem], mut start: usize) -> usize {
         let call_ids: HashSet<&str> = contents[start..]
             .iter()
             .filter_map(|item| match item {
-                ContentItem::ToolCall { tool_call_id, .. } => Some(tool_call_id.as_str()),
+                ContentItem::ToolCall(ToolCall { tool_call_id, .. }) => Some(tool_call_id.as_str()),
                 _ => None,
             })
             .collect();
@@ -258,7 +258,7 @@ fn find_safe_start(contents: &[ContentItem], mut start: usize) -> usize {
         // 步骤 3：在被裁掉的前半段中定位该 tool_call 的位置。
         let Some(call_idx) = contents[..start].iter().position(|item| {
             matches!(item,
-            ContentItem::ToolCall { tool_call_id, .. } if tool_call_id == missing_call )
+            ContentItem::ToolCall(ToolCall { tool_call_id, .. }) if tool_call_id == missing_call )
         }) else {
             // 找不到配对（本身就是孤立项），无法继续回退，直接结束。
             break;

@@ -17,7 +17,11 @@ async fn main() -> anyhow::Result<()> {
     let agent = Agent::new(QWEN_MODEL, Some("你是一个全能助手"), toolbox);
 
     let result = agent
-        .run("我的名字叫 kiven是一个软件开发工程师", "multiple_run_agent")
+        .run(
+            Some("我的名字叫 kiven是一个软件开发工程师"),
+            "multiple_run_agent",
+            None,
+        )
         .await?;
 
     println!("\n回答1: {:?}", result.output);
@@ -25,7 +29,11 @@ async fn main() -> anyhow::Result<()> {
     println!("\n事件: {:?}", result.context.session.events);
 
     let result = agent
-        .run("我叫什么名字,我的职业是什么", "multiple_run_agent")
+        .run(
+            Some("我叫什么名字,我的职业是什么"),
+            "multiple_run_agent",
+            None,
+        )
         .await?;
 
     println!("\n回答2: {:?}", result.output);

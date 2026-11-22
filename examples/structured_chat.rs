@@ -1,8 +1,7 @@
 use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
-use zephyr::constant::QWEN_MODEL;
-use zephyr::llm::chat_completion_structured;
+use zephyr::{constant::QWEN_MODEL, llm::chat_completion_structured};
 
 #[tokio::main]
 async fn main() -> Result<()> {
