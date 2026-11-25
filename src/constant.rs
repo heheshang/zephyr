@@ -3,15 +3,15 @@ pub const OPENAI_BASE_URL: &str = "OPENAI_BASE_URL";
 pub const HUGGING_FACE_TOKEN_NAME: &str = "HF_TOKEN";
 pub const TAVILY_API_KEY_NAME: &str = "TAVILY_API_KEY";
 
-pub const GPT_6_LUNA_PRO_MODEL: &str = "openai/gpt-6-luna-pro";
-pub const NEMOTRON_3_ULTRA_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b:free";
-pub const DEEPSEEK_V41_FLASH_MODEL: &str = "deepseek/deepseek-v4.1-flash";
-pub const SPACE_BUNNY_ALPHA_MODEL: &str = "stealth/space-bunny-alpha";
-pub const MUSE_SPARK_13_CONTRIBUTOR_MODEL: &str = "meta/muse-spark-1.3-contributor";
+pub const GPT_6_LUNA_PRO_MODEL: &str = "qwen-plus";
+pub const NEMOTRON_3_ULTRA_MODEL: &str = "qwen-max";
+pub const DEEPSEEK_V41_FLASH_MODEL: &str = "qwen-turbo";
+pub const SPACE_BUNNY_ALPHA_MODEL: &str = "qwen-vl-max";
+pub const MUSE_SPARK_13_CONTRIBUTOR_MODEL: &str = "qwen-plus-latest";
 
-pub const TEXT_EMBEDDING_3_SMALL_MODEL: &str = "openai/text-embedding-3-small";
+pub const TEXT_EMBEDDING_3_SMALL_MODEL: &str = "text-embedding-v3";
 
-pub const AGENT_NAME: &str = "study-agent";
+pub const AGENT_NAME: &str = "zephyr";
 pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
 
 pub const SYSTEM_INSTRUCTION: &str = r#"你是一名面向儿童(尤其是中国儿童)的学习助手。

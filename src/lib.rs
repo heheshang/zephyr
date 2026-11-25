@@ -3,6 +3,7 @@ pub mod constant;
 pub mod gaia;
 pub mod llm;
 pub mod memory;
+pub mod planning;
 pub mod search;
 pub mod session;
 pub mod tool;

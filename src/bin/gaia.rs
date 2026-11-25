@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use study_agent::{
+use tokio::task::JoinSet;
+use zephyr::{
     constant::{self, FINAL_ANSWER_TOOL_NAME},
     gaia::{
         dataset::{download_gaia_dataset_attachments, load_gaia_dataset},
@@ -10,7 +11,6 @@ use study_agent::{
     llm::semaphore::get_semaphore,
     tool::{build_toolbox, final_answer::FinalAnswerTool},
 };
-use tokio::task::JoinSet;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

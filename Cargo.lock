@@ -2963,37 +2963,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "study-agent"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-openai",
- "async-trait",
- "backon",
- "base64 0.23.1",
- "calamine",
- "chrono",
- "csv",
- "dotenv",
- "image",
- "pdfium-render",
- "reqwest",
- "rmcp",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "thiserror",
- "tiktoken-rs",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3829,6 +3798,37 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure",
+]
+
+[[package]]
+name = "zephyr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-openai",
+ "async-trait",
+ "backon",
+ "base64 0.23.1",
+ "calamine",
+ "chrono",
+ "csv",
+ "dotenv",
+ "image",
+ "pdfium-render",
+ "reqwest",
+ "rmcp",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tiktoken-rs",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

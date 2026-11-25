@@ -1,12 +1,20 @@
 [package]
-name = "study-agent"
+name = "zephyr"
 version = "0.1.0"
 edition = "2024"
-default-run = "study-agent"
+default-run = "zephyr"
+
+
+[[example]]
+name = "planning"
+path = "examples/planning.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-async-openai = { version = "0.42.0", features = ["chat-completion", "embedding"] }
+async-openai = { version = "0.42.0", features = [
+    "chat-completion",
+    "embedding",
+] }
 async-trait = "0.1.92"
 backon = "1.6.0"
 base64 = "0.23.1"
@@ -24,7 +32,7 @@ rmcp = { version = "3.4.0", features = [
     "transport-child-process",
     "transport-io",
 ] }
-rusqlite = { version ="0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

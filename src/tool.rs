@@ -11,6 +11,7 @@ use crate::{
             read_media::ReadMediaTool, unzip::UnzipFileTool,
         },
         mcp::{client::McpClient, mcp_tool::McpTool},
+        planning::CreateTasksTool,
         web_search::WebSearchTool,
     },
 };
@@ -20,8 +21,8 @@ pub mod file;
 pub mod final_answer;
 pub mod mcp;
 pub mod memory_tool;
+pub mod planning;
 pub mod web_search;
-
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -67,6 +68,7 @@ pub async fn build_toolbox() -> anyhow::Result<ToolBox> {
         Box::new(DeleteFileTool),
         Box::new(ReadFileTool),
         Box::new(ReadMediaTool),
+        Box::new(CreateTasksTool),
     ];
 
     let mcp_client = Arc::new(McpClient::connect().await?);

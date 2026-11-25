@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use study_agent::{
+use uuid::Uuid;
+use zephyr::{
     agent::{
         callback::before_llm_callback::{
             context_optimizer::ContextOptimizer, memory_injection::MemoryInjectionCallback,
@@ -8,12 +9,11 @@ use study_agent::{
         event::{AgentEvent, ContentItem, Message},
         model::Agent,
     },
-    constant::{FINAL_ANSWER_TOOL_NAME, GPT_6_LUNA_PRO_MODEL},
+    constant::{FINAL_ANSWER_TOOL_NAME, GPT_6_LUNA_PRO_MODEL, TEXT_EMBEDDING_3_SMALL_MODEL},
     llm::llm_answer::TextAnswer,
     memory::memory_manager::TaskMemoryManager,
     tool::{build_toolbox, final_answer::FinalAnswerTool, memory_tool::RecallMemoryTool},
 };
-use uuid::Uuid;
 
 const DB_PATH: &str = "memory_test.db";
 
@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let memory_manager = Arc::new(TaskMemoryManager::new(
         DB_PATH,
         GPT_6_LUNA_PRO_MODEL,
-        "text-embedding-3-small",
+        TEXT_EMBEDDING_3_SMALL_MODEL,
     )?);
 
     let mut toolbox = build_toolbox().await?;
@@ -101,7 +101,9 @@ async fn main() -> anyhow::Result<()> {
     // ============================================================
     println!("\n========== STEP 3: 直接检索 ==========\n");
 
-    let found = memory_manager.search("半径是 3 厘米的圆,面积多少?", 3).await?;
+    let found = memory_manager
+        .search("半径是 3 厘米的圆,面积多少?", 3)
+        .await?;
     println!("检索到 {} 条", found.len());
     for mem in &found {
         println!("{mem:#?}");

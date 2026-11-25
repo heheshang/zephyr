@@ -1,4 +1,4 @@
-use study_agent::{
+use zephyr::{
     search::{chunking::fixed_length_chunking, vector_search::vector_search},
     tool::web_search::{SearchResult, WebSearchArgs, search_web},
 };
