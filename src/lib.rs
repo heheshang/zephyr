@@ -3,6 +3,7 @@ pub mod constant;
 pub mod gaia;
 pub mod llm;
 pub mod memory;
+pub mod multi_agent;
 pub mod planning;
 pub mod sandbox;
 pub mod search;

@@ -3845,6 +3845,7 @@ dependencies = [
  "chrono",
  "csv",
  "dotenv",
+ "futures",
  "image",
  "pdfium-render",
  "reqwest",

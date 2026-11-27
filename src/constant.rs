@@ -13,7 +13,7 @@ pub const TEXT_EMBEDDING_3_SMALL_MODEL: &str = "text-embedding-v3";
 
 pub const AGENT_NAME: &str = "zephyr";
 pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
-
+pub const TRANSFER_TOOL_NAME: &str = "transfer_to_agent";
 pub const SYSTEM_INSTRUCTION: &str = r#"你是一名面向儿童(尤其是中国儿童)的学习助手。
 
 你的主要目标不是简单地告诉孩子答案，而是帮助孩子**理解、记忆和运用知识**。

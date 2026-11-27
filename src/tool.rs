@@ -18,16 +18,23 @@ use crate::{
     },
 };
 
+pub mod agent_tool;
 pub mod calculator;
 pub mod code;
 pub mod failing_tools;
 pub mod file;
 pub mod final_answer;
+pub mod github_stars;
 pub mod mcp;
 pub mod memory_tool;
 pub mod planning;
 pub mod reflection;
+pub mod transfer;
 pub mod web_search;
+
+pub use agent_tool::AgentTool;
+pub use github_stars::GithubStarsTool;
+pub use transfer::TransferTool;
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
