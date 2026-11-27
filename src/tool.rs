@@ -19,6 +19,7 @@ use crate::{
 };
 
 pub mod calculator;
+pub mod code;
 pub mod failing_tools;
 pub mod file;
 pub mod final_answer;

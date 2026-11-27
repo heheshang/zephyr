@@ -4,6 +4,8 @@ pub mod gaia;
 pub mod llm;
 pub mod memory;
 pub mod planning;
+pub mod sandbox;
 pub mod search;
 pub mod session;
+pub mod skill;
 pub mod tool;

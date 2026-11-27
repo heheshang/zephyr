@@ -6,3 +6,5 @@ libpdfium.so
 *.db-wal
 *.db-shm
 *.db-journal
+/workspace
+/upload
