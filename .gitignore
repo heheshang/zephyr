@@ -8,3 +8,5 @@ libpdfium.so
 *.db-journal
 /workspace
 /upload
+/.zephyr
+.DS_Store

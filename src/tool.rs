@@ -17,7 +17,6 @@ use crate::{
         web_search::WebSearchTool,
     },
 };
-
 pub mod agent_tool;
 pub mod calculator;
 pub mod code;
@@ -35,6 +34,7 @@ pub mod web_search;
 pub use agent_tool::AgentTool;
 pub use github_stars::GithubStarsTool;
 pub use transfer::TransferTool;
+
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -71,8 +71,11 @@ pub trait Tool: Send + Sync {
 
 pub type ToolBox = HashMap<String, Box<dyn Tool>>;
 
-pub async fn build_toolbox() -> anyhow::Result<ToolBox> {
-    let mut tools: Vec<Box<dyn Tool>> = vec![
+/// 不依赖 MCP 的基础工具集。
+///
+/// 交互式入口在 MCP 启动失败时会回退到它，保证仍然可以对话和使用本地工具。
+pub fn build_basic_toolbox() -> ToolBox {
+    let tools: Vec<Box<dyn Tool>> = vec![
         Box::new(CalculatorTool),
         Box::new(WebSearchTool),
         Box::new(UnzipFileTool),
@@ -85,13 +88,20 @@ pub async fn build_toolbox() -> anyhow::Result<ToolBox> {
         Box::new(AlwaysFailingWikipediaTool),
     ];
 
+    tools
+        .into_iter()
+        .map(|tool| (tool.name().to_owned(), tool))
+        .collect()
+}
+
+pub async fn build_toolbox() -> anyhow::Result<ToolBox> {
+    let mut toolbox = build_basic_toolbox();
+
     let mcp_client = Arc::new(McpClient::connect().await?);
     for tool in mcp_client.list_tools().await? {
-        tools.push(Box::new(McpTool::new(mcp_client.clone(), tool)));
+        let mcp_tool = McpTool::new(mcp_client.clone(), tool);
+        toolbox.insert(mcp_tool.name().to_owned(), Box::new(mcp_tool));
     }
 
-    Ok(tools
-        .into_iter()
-        .map(|t| (t.name().to_owned(), t))
-        .collect())
+    Ok(toolbox)
 }
