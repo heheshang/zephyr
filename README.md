@@ -6,7 +6,7 @@ AI Agent framework in Rust.
 
 - crate 名：`zephyr`（edition 2024）
 - LLM 网关：百炼 DashScope 的 OpenAI 兼容接口（`async-openai`）
-- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep15，共 18 个里程碑 tag + 21 个本地提交）
+- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep15，共 17 个里程碑 tag + 23 个本地提交）
 
 ---
 
@@ -37,25 +37,25 @@ AI Agent framework in Rust.
 
 ## 核心特性
 
-| 能力         | 说明                                                       | 主要代码位置                                                         |
-| ------------ | ---------------------------------------------------------- | -------------------------------------------------------------------- |
-| ReAct 运行时 | `think → act → observe` 循环，最多 `max_steps` 步          | `src/agent/runtime/`                                                 |
-| 工具系统     | 统一 `Tool` trait，schema 由 `schemars` 自动生成           | `src/tool.rs`、`src/tool/`                                           |
-| 工具人工确认 | 危险工具挂起为 `PendingToolCall`，等待外部批准后恢复       | `src/agent/tool_confirmation.rs`                                     |
-| 会话管理     | `SessionManager` 抽象，默认内存实现，可插拔持久化          | `src/session/`                                                       |
-| 事件溯源     | 所有消息 / 工具调用 / 工具结果统一记录为 `AgentEvent`      | `src/agent/event.rs`                                                 |
-| 长期记忆     | SQLite 存储 + embedding 向量检索 + LLM 查重 + 自动注入     | `src/memory/`                                                        |
+| 能力         | 说明                                                                      | 主要代码位置                                                         |
+| ------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| ReAct 运行时 | `think → act → observe` 循环，最多 `max_steps` 步                         | `src/agent/runtime/`                                                 |
+| 工具系统     | 统一 `Tool` trait，schema 由 `schemars` 自动生成                          | `src/tool.rs`、`src/tool/`                                           |
+| 工具人工确认 | 危险工具挂起为 `PendingToolCall`，等待外部批准后恢复                      | `src/agent/tool_confirmation.rs`                                     |
+| 会话管理     | `SessionManager` 抽象，默认内存实现，可插拔持久化                         | `src/session/`                                                       |
+| 事件溯源     | 所有消息 / 工具调用 / 工具结果统一记录为 `AgentEvent`                     | `src/agent/event.rs`                                                 |
+| 长期记忆     | SQLite 存储 + embedding 向量检索 + LLM 查重 + 自动注入                    | `src/memory/`                                                        |
 | 文档知识库   | 文档 → 切片 → embedding → SQLite 落库 → **混合检索（向量 + BM25 + RRF）** | `src/knowledge/`                                                     |
-| 知识库工具   | `search_knowledge` / `add_knowledge`，Agent 主动检索与入库 | `src/tool/knowledge_tool.rs`                                         |
-| 上下文优化   | token 计数、结果压缩、滑动窗口、增量摘要                   | `src/agent/callback/before_llm_callback/context_optimizer/`          |
-| 结构化输出   | `ask::<T>()` 强制 JSON Schema 严格模式 + 指数退避重试      | `src/llm/ask.rs`                                                     |
-| MCP 客户端   | 通过子进程 stdio 接入外部 MCP Server，动态注册工具         | `src/tool/mcp/`                                                      |
-| 规划工具     | `create_tasks` 任务清单，供复杂多步任务使用                | `src/tool/planning.rs`、`src/planning/`                              |
-| 反思工具     | `reflection` 显式暴露"是否需要重新规划"的决策点            | `src/tool/reflection.rs`                                             |
-| 代码沙箱     | Podman 容器内跑 Python / Bash，宿主工具经 bridge 回调      | `src/sandbox/`、`src/tool/code/`                                     |
-| 技能加载     | 扫描 `SKILL.md`，只把 name/description 注入提示词          | `src/skill.rs`                                                       |
-| 多智能体     | Agent 树 + `transfer_to_agent` 交接 + Agent-as-Tool        | `src/multi_agent/`、`src/tool/transfer.rs`、`src/tool/agent_tool.rs` |
-| 基准评测     | GAIA 数据集加载、附件下载、有/无工具对照评测               | `src/gaia/`                                                          |
+| 知识库工具   | `search_knowledge` / `add_knowledge`，Agent 主动检索与入库                | `src/tool/knowledge_tool.rs`                                         |
+| 上下文优化   | token 计数、结果压缩、滑动窗口、增量摘要                                  | `src/agent/callback/before_llm_callback/context_optimizer/`          |
+| 结构化输出   | `ask::<T>()` 强制 JSON Schema 严格模式 + 指数退避重试                     | `src/llm/ask.rs`                                                     |
+| MCP 客户端   | 通过子进程 stdio 接入外部 MCP Server，动态注册工具                        | `src/tool/mcp/`                                                      |
+| 规划工具     | `create_tasks` 任务清单，供复杂多步任务使用                               | `src/tool/planning.rs`、`src/planning/`                              |
+| 反思工具     | `reflection` 显式暴露"是否需要重新规划"的决策点                           | `src/tool/reflection.rs`                                             |
+| 代码沙箱     | Podman 容器内跑 Python / Bash，宿主工具经 bridge 回调                     | `src/sandbox/`、`src/tool/code/`                                     |
+| 技能加载     | 扫描 `SKILL.md`，只把 name/description 注入提示词                         | `src/skill.rs`                                                       |
+| 多智能体     | Agent 树 + `transfer_to_agent` 交接 + Agent-as-Tool                       | `src/multi_agent/`、`src/tool/transfer.rs`、`src/tool/agent_tool.rs` |
+| 基准评测     | GAIA 数据集加载、附件下载、有/无工具对照评测                              | `src/gaia/`                                                          |
 
 ---
 
@@ -206,8 +206,8 @@ timeline
 | ⑫ 代码沙箱     | `ep13`                 | 2026-11-05    | 24 文件  | 怎么让模型安全地执行真实代码                   | `sandbox/`（podman + bridge）                      |
 | ⑬ 多智能体     | `ep14`                 | 2026-11-12    | 10 文件  | 怎么把单一 Agent 拆成有分工的团队              | `multi_agent/`、`TransferTool`、`AgentTool`        |
 | ⑭ 终端交互     | `interactive-terminal` | 2026-11-12    | 7 文件   | 怎么让框架成为可日常使用的终端产品             | 行式 REPL、Agent 树装配                            |
-| ⑮ 本地增强     | 21 个提交              | 2026-11-12 起 | 54 文件  | 怎么把上游代码变成自己的项目                   | `zephyr` 重命名、`skill.rs`、新工具                |
-| ⑯ 文档知识库   | `ep15`                 | 2026-11-28    | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具            |
+| ⑮ 本地增强     | 23 个提交              | 2026-11-12 起 | 54 文件  | 怎么把上游代码变成自己的项目                   | `zephyr` 重命名、`skill.rs`、新工具                |
+| ⑯ 文档知识库   | `ep15`                 | 2026-11-28    | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具             |
 
 ---
 
@@ -939,9 +939,9 @@ if !sandbox_prompt.is_empty() {
 
 ---
 
-### 阶段 ⑮ 本地增强（21 个提交）
+### 阶段 ⑮ 本地增强（23 个提交）
 
-上游 ep14 之后，本地继续推进了 21 个提交，把项目从"跟随式改造"变成"自己的项目"：
+上游 ep14 之后，本地继续推进了 23 个提交，把项目从"跟随式改造"变成"自己的项目"：
 
 | 提交                              | 内容                                                          |
 | --------------------------------- | ------------------------------------------------------------- |
@@ -954,6 +954,8 @@ if !sandbox_prompt.is_empty() {
 | `137f702` / `b1329ef`             | 新工具入库、新依赖与环境变量                                  |
 | `2dd43fa`                         | Agent 之间的 transfer 能力                                    |
 | `c599d2b`                         | `.gitignore` / Cargo 更新，工具功能增强                       |
+| `022c7cc`                         | 文档知识库（`src/knowledge/`）+ 知识库工具                    |
+| `f3b05a4`                         | README 补充 `ep15` 阶段说明                                   |
 
 同时新增了两个本项目独有的模块：
 
@@ -981,15 +983,15 @@ pub struct SkillInfo {
 
 **实现细节**：新增 `src/knowledge/` 模块，补齐「文档 → 切片 → embedding → 落库 → 混合检索 → 拼进 prompt」完整链路：
 
-| 文件                | 职责                                                                       |
-| ------------------- | -------------------------------------------------------------------------- |
-| `src/knowledge/model.rs`         | 领域模型：`Document`、`Chunk`、`SearchHit`            |
-| `src/knowledge/store.rs`         | SQLite 存储层：文档表、切片表、FTS5 虚表            |
-| `src/knowledge/index.rs`         | `sqlite-vec` 的 `vec0` 向量索引（**建连接前必须注册扩展**） |
-| `src/knowledge/tokenizer.rs`     | 中英混合分词（中文 bigram + 英文词干）               |
-| `src/knowledge/embedder.rs`      | `Embedder` trait 抽象（可注入假实现便于测试）           |
-| `src/knowledge/hybrid.rs`        | 混合检索：向量 + BM25(FTS5) → RRF 融合排序            |
-| `src/knowledge/knowledge_base.rs`| 入库 / 混合检索 / 删除 / 列表的编排层                |
+| 文件                              | 职责                                                        |
+| --------------------------------- | ----------------------------------------------------------- |
+| `src/knowledge/model.rs`          | 领域模型：`Document`、`Chunk`、`SearchHit`                  |
+| `src/knowledge/store.rs`          | SQLite 存储层：文档表、切片表、FTS5 虚表                    |
+| `src/knowledge/index.rs`          | `sqlite-vec` 的 `vec0` 向量索引（**建连接前必须注册扩展**） |
+| `src/knowledge/tokenizer.rs`      | 中英混合分词（中文 bigram + 英文词干）                      |
+| `src/knowledge/embedder.rs`       | `Embedder` trait 抽象（可注入假实现便于测试）               |
+| `src/knowledge/hybrid.rs`         | 混合检索：向量 + BM25(FTS5) → RRF 融合排序                  |
+| `src/knowledge/knowledge_base.rs` | 入库 / 混合检索 / 删除 / 列表的编排层                       |
 
 两个关键设计：
 
@@ -2034,10 +2036,10 @@ start=6  → [6..10) "ghij"   （end == len，结束）
 | 文件                | 职责                                                                       |
 | ------------------- | -------------------------------------------------------------------------- |
 | `model.rs`          | `Document`（原始文档）、`Chunk`（切片+向量）、`SearchHit` / `SearchResult` |
-| `store.rs`          | `KnowledgeStore`：SQLite 持久化 + 混合检索编排                            |
-| `index.rs`          | `KnowledgeIndex`：vec0 向量索引 + FTS5 关键词索引（含同步触发器）        |
-| `tokenizer.rs`      | 中英混合分词器（中文 bigram + 英文整词）                                 |
-| `hybrid.rs`         | RRF（Reciprocal Rank Fusion）融合多路召回结果                             |
+| `store.rs`          | `KnowledgeStore`：SQLite 持久化 + 混合检索编排                             |
+| `index.rs`          | `KnowledgeIndex`：vec0 向量索引 + FTS5 关键词索引（含同步触发器）          |
+| `tokenizer.rs`      | 中英混合分词器（中文 bigram + 英文整词）                                   |
+| `hybrid.rs`         | RRF（Reciprocal Rank Fusion）融合多路召回结果                              |
 | `embedder.rs`       | `Embedder` trait；`ApiEmbedder` 走接口，`FakeEmbedder` 供离线测试          |
 | `knowledge_base.rs` | `KnowledgeBaseManager`：编排切片 → embedding → 落库 → 检索                 |
 
@@ -2145,11 +2147,11 @@ bigram 切分后，一个长查询会拆出多个 bigram，而这些 bigram 未�
 
 #### 检索方式
 
-| 方法                   | 用途                                         | 阈值过滤   |
-| ---------------------- | -------------------------------------------- | ---------- |
-| `search()`（默认）     | 混合检索，RRF 融合                           | 不套阈值   |
-| `search_vector_only()` | 纯向量；语义相近但用词不同也能找到           | 套阈值     |
-| `search_keyword_only()`| 纯 BM25；专有名词、函数名、错误码更准         | 不套阈值   |
+| 方法                    | 用途                                  | 阈值过滤 |
+| ----------------------- | ------------------------------------- | -------- |
+| `search()`（默认）      | 混合检索，RRF 融合                    | 不套阈值 |
+| `search_vector_only()`  | 纯向量；语义相近但用词不同也能找到    | 套阈值   |
+| `search_keyword_only()` | 纯 BM25；专有名词、函数名、错误码更准 | 不套阈值 |
 
 > **混合路径为什么不套 `min_similarity` 阈值**：
 > 阈值是针对余弦相似度设计的，但关键词路的命中是**字面精确匹配**。
@@ -3734,6 +3736,7 @@ Zephyr/
 - **注释类改动保持纯增量**：不改动既有代码逻辑
 - **分层习惯**：`src/tool` 扁平工具模块、`src/llm/*`、`src/agent/callback/*`、`src/search/*`、`src/memory/*`、`src/session/*`
 - **上游对齐**：与 `solenovex/rust-ai-agent` 上游保持文件树一致，上游以 `epNN` 形式打 tag
+- **历史分叉**：本地 `main` 是重写过的孤儿历史（根提交 `21a73df`），与上游 38 个提交**无共同祖先**。上游系列的 tag（`ep04`~`ep14`、`interactive-terminal`、`refactor-after-ep10`）指向的提交通过远端 `upstream-history` 分支保持可达，在 GitHub 上可正常浏览 diff
 - **测试**：模块内 `#[cfg(test)]` 单元测试，内存库（`:memory:`）跑存储层测试，不依赖外部服务
 
 ### 常用命令
