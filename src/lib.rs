@@ -1,4 +1,6 @@
+pub mod a2a;
 pub mod agent;
+pub mod app;
 pub mod constant;
 pub mod gaia;
 pub mod knowledge;

@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", "=".repeat(60));
     for (i, result) in results.iter().enumerate() {
         println!("Similarity: {}, {:.3}", i + 1, result.similarity);
-        print!("{}", &result.text.chars().take(300).collect::<String>());
+        print!("{}", result.text.chars().take(300).collect::<String>());
         println!("{}", "=".repeat(60));
     }
 

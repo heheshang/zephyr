@@ -14,6 +14,36 @@ pub const TEXT_EMBEDDING_3_SMALL_MODEL: &str = "text-embedding-v3";
 pub const AGENT_NAME: &str = "zephyr";
 pub const FINAL_ANSWER_TOOL_NAME: &str = "final_answer";
 pub const TRANSFER_TOOL_NAME: &str = "transfer_to_agent";
+
+// ---------------------------------------------------------------------------
+// A2A 协议配置
+// ---------------------------------------------------------------------------
+//
+// 这些值是"容易漂移"的配置：环境变量名、默认端口、发现路径。
+// 集中管理，业务代码里不硬编码字符串。
+
+/// A2A 服务端默认监听端口。
+pub const A2A_DEFAULT_PORT: u16 = 8899;
+
+/// A2A 服务端默认监听地址：只允许本机访问。
+///
+/// 对外暴露前应显式设置 `ZEPHYR_A2A_HOST`，并配合鉴权。
+pub const A2A_DEFAULT_HOST: &str = "127.0.0.1";
+
+/// A2A 服务端监听地址的环境变量名。
+pub const A2A_ENV_HOST: &str = "ZEPHYR_A2A_HOST";
+/// A2A 服务端监听端口的环境变量名。
+pub const A2A_ENV_PORT: &str = "ZEPHYR_A2A_PORT";
+/// 远端 A2A peer 地址列表（逗号分隔）的环境变量名。
+pub const A2A_ENV_PEERS: &str = "ZEPHYR_A2A_PEERS";
+/// A2A Bearer Token 的环境变量名。
+pub const A2A_ENV_TOKEN: &str = "ZEPHYR_A2A_TOKEN";
+
+/// Agent Card 的发现路径（规范 8.2 节）。
+///
+/// 与 `crate::a2a::types::WELL_KNOWN_AGENT_CARD_PATH` 相同；
+/// 这里再放一份是为了让终端层不必依赖 a2a 模块。
+pub const A2A_CARD_PATH: &str = "/.well-known/agent-card.json";
 pub const SYSTEM_INSTRUCTION: &str = r#"你是一名面向儿童(尤其是中国儿童)的学习助手。
 
 你的主要目标不是简单地告诉孩子答案，而是帮助孩子**理解、记忆和运用知识**。

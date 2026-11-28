@@ -2,7 +2,7 @@
 
 AI Agent framework in Rust.
 
-基于 Rust 从零实现的 AI Agent 框架：自带 ReAct 式运行时、工具系统、会话管理、长期记忆（RAG）、上下文优化器、MCP 客户端、代码沙箱、技能（Skill）加载与多智能体编排，并附带 GAIA 基准评测入口。
+基于 Rust 从零实现的 AI Agent 框架：自带 ReAct 式运行时、工具系统、会话管理、长期记忆（RAG）、上下文优化器、MCP 客户端、代码沙箱、技能（Skill）加载、多智能体编排与 **A2A 协议**（Agent 间跨进程调用），并附带 GAIA 基准评测入口。
 
 - crate 名：`zephyr`（edition 2024）
 - LLM 网关：百炼 DashScope 的 OpenAI 兼容接口（`async-openai`）
@@ -23,6 +23,8 @@ AI Agent framework in Rust.
 - [模块详解](#模块详解)
 - [回调机制（Callback）](#回调机制callback)
 - [工具系统](#工具系统)
+- [A2A 协议（Agent2Agent）](#a2a-协议agent2agent)
+- [终端应用组装层](#终端应用组装层)
 - [长期记忆系统](#长期记忆系统)
 - [文档知识库（RAG）](#文档知识库rag)
 - [上下文优化器](#上下文优化器)
@@ -50,6 +52,10 @@ AI Agent framework in Rust.
 | 上下文优化   | token 计数、结果压缩、滑动窗口、增量摘要                                  | `src/agent/callback/before_llm_callback/context_optimizer/`          |
 | 结构化输出   | `ask::<T>()` 强制 JSON Schema 严格模式 + 指数退避重试                     | `src/llm/ask.rs`                                                     |
 | MCP 客户端   | 通过子进程 stdio 接入外部 MCP Server，动态注册工具                        | `src/tool/mcp/`                                                      |
+| A2A 协议     | Agent Card + JSON-RPC over HTTP：既能当服务端被调用，也能当客户端调远端   | `src/a2a/`                                                           |
+| A2A 鉴权     | HTTP Bearer Token（常量时间比较），Agent Card 公开、`/rpc` 受保护         | `src/a2a/auth.rs`                                                    |
+| Agent 树     | `set_sub_agents` 组装父子关系，转移目标 = 子 + 父 + 兄弟                  | `src/agent/tree.rs`                                                  |
+| 终端组装层   | `main.rs` 只管进程生命周期，组装/命令/渲染/A2A 各自成模块                 | `src/app/`                                                           |
 | 规划工具     | `create_tasks` 任务清单，供复杂多步任务使用                               | `src/tool/planning.rs`、`src/planning/`                              |
 | 反思工具     | `reflection` 显式暴露"是否需要重新规划"的决策点                           | `src/tool/reflection.rs`                                             |
 | 代码沙箱     | Podman 容器内跑 Python / Bash，宿主工具经 bridge 回调                     | `src/sandbox/`、`src/tool/code/`                                     |
@@ -87,6 +93,10 @@ cp .env.example .env
 | `SANDBOX_WORKSPACE` | 沙箱工作区        | 宿主目录挂载为容器内 `/workspace`，默认 `./workspace`                                                                                     |
 | `UPLOAD_ROOT`       | 上传白名单根目录  | 仅该目录下的文件可被 `upload_file` 上传；不设则不注册上传工具                                                                             |
 | `SKILLS_DIR`        | 技能目录          | 宿主目录只读挂载为 `/skills`，扫描其中的 `SKILL.md`                                                                                       |
+| `ZEPHYR_A2A_HOST`   | A2A 监听地址      | 可选，默认 `127.0.0.1`（仅本机）；设为 `0.0.0.0` 对外暴露时务必配合 Token                                                                 |
+| `ZEPHYR_A2A_PORT`   | A2A 监听端口      | 可选，默认 `8899`                                                                                                                         |
+| `ZEPHYR_A2A_PEERS`  | 远端 A2A peer     | 可选，逗号分隔的远端 agent 地址（如 `http://10.0.0.2:8899,http://10.0.0.3:8899`），启动时自动发现并接成本地工具                           |
+| `ZEPHYR_A2A_TOKEN`  | A2A Bearer Token  | 可选，设置后 `/rpc` 需要 `Authorization: Bearer <token>`；Agent Card 端点仍然公开                                                         |
 
 > 注意：该网关只接受**不带厂商前缀**的模型名（例如 `qwen-plus`），`provider/model` 形式会返回 `Model not exist`。
 > 代码在启动时通过 `dotenv::dotenv()` 加载 `.env`；`src/search/embedding.rs` 与 `vector_search.rs` 内部也会自行加载。
@@ -117,6 +127,18 @@ cargo run --example hybrid_search_demo
 # 知识库工具端到端演示（examples/knowledge_tool_demo.rs）
 cargo run --example knowledge_tool_demo
 
+# A2A 协议端到端演示（examples/a2a_demo.rs）
+cargo run --example a2a_demo
+
+# A2A 服务端（examples/a2a_serve.rs，只做服务端等外部客户端来调）
+cargo run --example a2a_serve
+
+# A2A 外部客户端（examples/a2a_client.rs，配合 a2a_serve 使用）
+cargo run --example a2a_client
+
+# A2A 鉴权端到端测试（examples/a2a_auth.rs）
+cargo run --example a2a_auth
+
 # GAIA 基准评测（src/bin/gaia.rs）
 cargo run --bin gaia
 
@@ -139,7 +161,8 @@ assistant（根，24 步）
 - 危险工具执行前挂起为 `PendingToolCall`，终端询问 `y/n` 后恢复执行；
 - `/remember` 把当前会话沉淀为长期记忆，之后自动检索注入；
 - `/knowledge` 列出知识库里的文档（Agent 也可用 `add_knowledge` 入库、`search_knowledge` 检索）；
-- `/agents`、`/tools`、`/history` 可查看 Agent 树、工具清单与事件流。
+- `/agents`、`/tools`、`/history` 可查看 Agent 树、工具清单与事件流；
+- 启动时按需对外暴露 **A2A 服务端**（Agent Card + `/rpc`），并把远端 A2A agent 接成本地工具；`/a2a` 查看两端的现状。
 
 ```
 /help        显示帮助
@@ -150,11 +173,12 @@ assistant（根，24 步）
 /history [n] 查看最近 n 条事件
 /remember    把当前会话提取为长期记忆
 /knowledge   列出知识库中的文档
+/a2a         查看 A2A 服务端与已接入的远端 agent
 /clear       清屏
 /quit        退出
 ```
 
-> MCP、沙箱、长期记忆、文档知识库都是**可选能力**：启动失败时程序会打印 warning 并回退到基础工具集，不影响对话。
+> MCP、沙箱、长期记忆、文档知识库、A2A 都是**可选能力**：启动失败时程序会打印 warning 并回退到基础工具集，不影响对话。
 
 ---
 
@@ -187,28 +211,34 @@ timeline
         ep14 多智能体 : transfer / workflow / Agent-as-Tool
         interactive-terminal 终端交互 : 行式 REPL + Agent 树
         ep15 文档知识库 : 切片 / 向量落库 / 混合检索
+    section 协议化
+        A2A 协议 : Agent Card + JSON-RPC over HTTP
+        终端分层重构 : main.rs 只管生命周期
 ```
 
 ### 阶段总览
 
-| 阶段           | tag / 提交             | 本项目提交     | 日期          | 规模     | 解决的问题                                     | 沉淀的核心结构                                     |
-| -------------- | ---------------------- | -------------- | ------------- | -------- | ---------------------------------------------- | -------------------------------------------------- |
-| ① LLM 接入     | `ep04`                 | `21a73df`     | 2026-11-16    | 30 文件  | 怎么稳定地跟 LLM 对话、拿到可解析的结构化结果  | `llm/{stream,complete,structured}.rs`、`semaphore` |
-| ② 工具抽象     | `ep05`                 | `9e72149`     | 2026-11-17    | 19 文件  | 怎么让模型"调用能力"，而不是只会说话           | `Tool` trait、`ToolBox`                            |
-| ③ MCP 接入     | `ep06`                 | `11f218f`     | 2026-11-17    | 12 文件  | 怎么复用外部已有工具服务，而不是重复造轮子     | `McpClient`（rmcp 子进程 stdio）                   |
-| ④ Agent 运行时 | `ep07`                 | `1e63970`     | 2026-11-17    | 18 文件  | 怎么把"想→做→看结果"变成可循环的运行时         | `Agent`、`ExecutionContext`、`Event`/`ContentItem` |
-| ⑤ GAIA 评测    | `ep07-gaia`            | `c6a7396`     | 2026-11-17    | 4 文件   | 怎么量化 Agent 到底比裸 LLM 强多少             | 有/无工具对照评测流程                              |
-| ⑥ 回调机制     | `ep08`                 | `5c75496`     | 2026-11-18    | 44 文件  | 怎么在不改动运行时核心的前提下插入横切逻辑     | 三类 callback trait                                |
-| ⑦ 上下文优化   | `ep09`                 | `7c27d67`     | 2026-11-20    | 15 文件  | 怎么让长会话不撑爆上下文                       | `LlmRequest` + `ContextOptimizer`                  |
-| ⑧ 会话与审批   | `ep10`                 | `d66a45f`     | 2026-11-20    | 25 文件  | 怎么跨多轮保留状态，怎么在危险操作前停下来问人 | `SessionManager`、`confirmation.rs`                |
-| ⑨ 长期记忆     | `ep11`                 | `32e99b4`     | 2026-11-22    | 148 文件 | 怎么让经验跨会话沉淀并复用                     | `TaskMemoryManager` + SQLite                       |
-| ⑩ 分层重构     | `ep11-refactored`      | `32e99b4`     | 2026-11-22    | 148 文件 | 怎么让前 9 个阶段的代码摆放得可读              | 目录即职责的模块布局                               |
-| ⑪ 规划与反思   | `ep12`                 | `137f702`     | 2026-11-25    | 3 文件   | 怎么让模型显式管理待办、显式承认走错路         | `create_tasks`、`reflection`                       |
-| ⑫ 代码沙箱     | `ep13`                 | `b1329ef`     | 2026-11-27    | 23 文件  | 怎么让模型安全地执行真实代码                   | `sandbox/`（podman + bridge）                      |
-| ⑬ 多智能体     | `ep14`                 | `2dd43fa`     | 2026-11-27    | 29 文件  | 怎么把单一 Agent 拆成有分工的团队              | `multi_agent/`、`TransferTool`、`AgentTool`        |
-| ⑭ 终端交互     | `interactive-terminal` | `c599d2b`     | 2026-11-28    | 11 文件  | 怎么让框架成为可日常使用的终端产品             | 行式 REPL、Agent 树装配                            |
-| ⑮ 运行时拆分   | `refactor-after-ep10`  | `7c27d67`     | 2026-11-20    | 15 文件  | 怎么让过大的 runtime.rs 职责单一                | `agent/runtime/` 按职责拆分                        |
-| ⑯ 文档知识库   | `ep15`                 | `022c7cc`     | 2026-11-28    | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具            |
+| 阶段           | tag / 提交             | 本项目提交 | 日期       | 规模     | 解决的问题                                     | 沉淀的核心结构                                     |
+| -------------- | ---------------------- | ---------- | ---------- | -------- | ---------------------------------------------- | -------------------------------------------------- |
+| ① LLM 接入     | `ep04`                 | `21a73df`  | 2026-11-16 | 30 文件  | 怎么稳定地跟 LLM 对话、拿到可解析的结构化结果  | `llm/{stream,complete,structured}.rs`、`semaphore` |
+| ② 工具抽象     | `ep05`                 | `9e72149`  | 2026-11-17 | 19 文件  | 怎么让模型"调用能力"，而不是只会说话           | `Tool` trait、`ToolBox`                            |
+| ③ MCP 接入     | `ep06`                 | `11f218f`  | 2026-11-17 | 12 文件  | 怎么复用外部已有工具服务，而不是重复造轮子     | `McpClient`（rmcp 子进程 stdio）                   |
+| ④ Agent 运行时 | `ep07`                 | `1e63970`  | 2026-11-17 | 18 文件  | 怎么把"想→做→看结果"变成可循环的运行时         | `Agent`、`ExecutionContext`、`Event`/`ContentItem` |
+| ⑤ GAIA 评测    | `ep07-gaia`            | `c6a7396`  | 2026-11-17 | 4 文件   | 怎么量化 Agent 到底比裸 LLM 强多少             | 有/无工具对照评测流程                              |
+| ⑥ 回调机制     | `ep08`                 | `5c75496`  | 2026-11-18 | 44 文件  | 怎么在不改动运行时核心的前提下插入横切逻辑     | 三类 callback trait                                |
+| ⑦ 上下文优化   | `ep09`                 | `7c27d67`  | 2026-11-20 | 15 文件  | 怎么让长会话不撑爆上下文                       | `LlmRequest` + `ContextOptimizer`                  |
+| ⑧ 会话与审批   | `ep10`                 | `d66a45f`  | 2026-11-20 | 25 文件  | 怎么跨多轮保留状态，怎么在危险操作前停下来问人 | `SessionManager`、`confirmation.rs`                |
+| ⑨ 长期记忆     | `ep11`                 | `32e99b4`  | 2026-11-22 | 148 文件 | 怎么让经验跨会话沉淀并复用                     | `TaskMemoryManager` + SQLite                       |
+| ⑩ 分层重构     | `ep11-refactored`      | `32e99b4`  | 2026-11-22 | 148 文件 | 怎么让前 9 个阶段的代码摆放得可读              | 目录即职责的模块布局                               |
+| ⑪ 规划与反思   | `ep12`                 | `137f702`  | 2026-11-25 | 3 文件   | 怎么让模型显式管理待办、显式承认走错路         | `create_tasks`、`reflection`                       |
+| ⑫ 代码沙箱     | `ep13`                 | `b1329ef`  | 2026-11-27 | 23 文件  | 怎么让模型安全地执行真实代码                   | `sandbox/`（podman + bridge）                      |
+| ⑬ 多智能体     | `ep14`                 | `2dd43fa`  | 2026-11-27 | 29 文件  | 怎么把单一 Agent 拆成有分工的团队              | `multi_agent/`、`TransferTool`、`AgentTool`        |
+| ⑭ 终端交互     | `interactive-terminal` | `c599d2b`  | 2026-11-28 | 11 文件  | 怎么让框架成为可日常使用的终端产品             | 行式 REPL、Agent 树装配                            |
+| ⑮ 运行时拆分   | `refactor-after-ep10`  | `7c27d67`  | 2026-11-20 | 15 文件  | 怎么让过大的 runtime.rs 职责单一               | `agent/runtime/` 按职责拆分                        |
+| ⑯ 本项目增强   | （持续叠加）           | 多提交     | —          | —        | 上游没有的能力怎么持续长在本项目上             | 技能加载、github_stars、上下文优化增强等           |
+| ⑰ 文档知识库   | `ep15`                 | `022c7cc`  | 2026-11-28 | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具             |
+| ⑱ A2A 协议     | （未打 tag）           | 待提交     | 2026-11-28 | 29 文件  | 怎么让 Agent 跨进程互相调用                    | `src/a2a/`、Agent Card、JSON-RPC、SSE              |
+| ⑲ 终端分层重构 | （未打 tag）           | 待提交     | 2026-11-28 | 8 文件   | 怎么让 `main.rs` 只管进程生命周期              | `src/app/`、`src/agent/tree.rs`                    |
 
 ---
 
@@ -706,8 +736,7 @@ src/agent/callback/
 └── after_tool_callback/search_compressor.rs
 ```
 
-**沉淀**：这是整个项目**最重要的一次投资**。此后所有新功能（沙箱、多智能体、技能）都只是往这套目录里填文件，没有任何一次再做过结构性重排。
----
+## **沉淀**：这是整个项目**最重要的一次投资**。此后所有新功能（沙箱、多智能体、技能）都只是往这套目录里填文件，没有任何一次再做过结构性重排。
 
 ### 阶段 ⑪ 规划与反思（ep12）
 
@@ -937,7 +966,6 @@ if !sandbox_prompt.is_empty() {
 
 **沉淀**：一个可以直接当产品用的终端 Agent。
 
-
 ---
 
 ### 阶段 ⑮ 运行时拆分（refactor-after-ep10）
@@ -957,26 +985,28 @@ src/agent/confirmation.rs   # 审批数据结构与两阶段恢复协议
 
 **沉淀**：一个"改一个分支不用翻半屏"的运行时内核，也是后续 `agent/runtime/{step,think}.rs` 进一步细化的基础。
 
-
 ---
 
 ### 阶段 ⑯ 本项目独有的增强
 
 在按 upstream 里程碑推进（ep04 → ep15）的同时，本项目还叠加了一批上游没有的能力：
 
-| 提交                              | 内容                                                          |
-| --------------------------------- | ------------------------------------------------------------- |
-| `e098a0f` / `adb6cf0` / `024582e` | 新增 LLM 前后与任务结束回调、交互式审批回调                  |
-| `7c27d67`                         | 上下文优化器重构 + `test_context_optimizer` 示例             |
-| `edff725` / `ff12606`             | Agent 执行流程增强、工具执行的**用户反馈机制**               |
-| `32e99b4`                         | 覆盖为 upstream `ep11-refactored` 代码结构（tree 逐字节一致） |
-| `4ca37e8`                         | 项目从 `study-agent` 更名为 `zephyr`                          |
-| `137f702` / `b1329ef`             | 新工具入库、新依赖与环境变量                                  |
-| `c599d2b`                         | `.gitignore` / Cargo 更新，工具功能增强                       |
-| `022c7cc`                         | 文档知识库（`src/knowledge/`）+ 知识库工具                    |
-| `f3b05a4` / `6f6b670`             | README 文档维护与数据校正                                     |
+| 提交                              | 内容                                                            |
+| --------------------------------- | --------------------------------------------------------------- |
+| `e098a0f` / `adb6cf0` / `024582e` | 新增 LLM 前后与任务结束回调、交互式审批回调                     |
+| `7c27d67`                         | 上下文优化器重构 + `test_context_optimizer` 示例                |
+| `edff725` / `ff12606`             | Agent 执行流程增强、工具执行的**用户反馈机制**                  |
+| `32e99b4`                         | 覆盖为 upstream `ep11-refactored` 代码结构（tree 逐字节一致）   |
+| `4ca37e8`                         | 项目从 `study-agent` 更名为 `zephyr`                            |
+| `137f702` / `b1329ef`             | 新工具入库、新依赖与环境变量                                    |
+| `c599d2b`                         | `.gitignore` / Cargo 更新，工具功能增强                         |
+| `022c7cc`                         | 文档知识库（`src/knowledge/`）+ 知识库工具                      |
+| `f3b05a4`                         | README 补充 `ep15` 阶段说明                                     |
+| `6f6b670` / `1fee181`             | README 文档维护与里程碑 tag 映射表校正                          |
+| （未提交）                        | A2A 协议实现（`src/a2a/`）+ 四个 A2A 示例                       |
+| （未提交）                        | 终端分层重构（`src/app/`）+ Agent 树抽离（`src/agent/tree.rs`） |
 
-同时新增了两个本项目独有的模块：
+同时新增了几个本项目独有的模块：
 
 **`src/skill.rs`（技能加载）** —— 一种"渐进式披露"的提示词技术：
 
@@ -1021,9 +1051,78 @@ pub struct SkillInfo {
 
 ---
 
+### 阶段 ⑱ A2A 协议：Agent 之间的跨进程调用
+
+**问题**：多智能体编排（ep14）解决的是**同一个进程内**的 agent 委派——`transfer_to_agent` 直接调另一个 `Agent` 的方法，对方是"函数"而不是"同事"。但现实中经常需要把一个 agent 暴露给**别的系统**（另一个团队写的服务、一套不同的技术栈），这时共享内存行不通，必须有一层跨进程的协议。MCP 在这里帮不上忙：MCP 暴露的是**工具**（被动函数），而对端是一个**自主体**——它有自己的模型、自己的工具、自己的多步规划，甚至会反过来找你确认信息。
+
+**实现细节**：新增 `src/a2a/` 模块，实现 [A2A 协议](https://a2a-protocol.org) 的 **JSON-RPC over HTTP** 绑定：
+
+| 文件                            | 职责                                                          |
+| ------------------------------- | ------------------------------------------------------------- |
+| `src/a2a/types.rs` + `types/`   | 数据模型：`Task` / `Message` / `Part` / `Artifact` / 流式事件 |
+| `src/a2a/jsonrpc.rs`            | JSON-RPC 2.0 信封 + 方法名常量 + HTTP 头服务参数解析          |
+| `src/a2a/error.rs`              | 9 个 A2A 错误 → JSON-RPC 错误码的完整映射                     |
+| `src/a2a/card.rs` + `card/`     | Agent Card（自描述清单）+ Skill / Interface / 鉴权方案声明    |
+| `src/a2a/auth.rs`               | HTTP Bearer Token 鉴权（常量时间比较）                        |
+| `src/a2a/server.rs` + `server/` | 服务端：Agent Card + `POST /rpc` + 方法分派 + SSE             |
+| `src/a2a/client.rs`             | 客户端：发现 + 发消息 + 查任务                                |
+| `src/a2a/client_tool.rs`        | 把远端 A2A agent 包装成本地 `Tool`                            |
+| `src/a2a/task_store.rs` + `/`   | 任务存储（内存实现 + Session 桥接）+ 任务状态机               |
+| `src/a2a/sse.rs`                | SSE 流解析（服务端与客户端共用同一套规则）                    |
+
+关键设计：
+
+1. **`contextId` 复用 `Session.session_id`**。A2A 的 Task 是跨请求实体，项目里的 Session 是"一次对话的上下文"，语义相近但不完全一致（Session 装的是内部 `AgentEvent`，Task 对外暴露 `history` 与 `artifacts`）。因此做了一层桥接：任务状态与产物放 `TaskStore`，agent 的实际运行上下文放 Session，两者用同一个 id 关联。多轮对话天然共享历史。
+2. **Agent Card 从 `Agent` 自动生成**。`Agent.name` → `card.name`，`Agent.description` → `card.description`，每个子 agent 一条委派 skill，每个工具一条能力 skill。系统提示词（`instructions`）**不进 skill**——它是写给模型看的内部指令，不是给客户端看的能力声明。这样一个纯本地的 `Agent` 就能零成本暴露成 A2A 端点。
+3. **能力未声明就不许调用**。服务端卡片未声明 `streaming` 时，流式方法返回 `UnsupportedOperationError`（`-32004`），而不是"尽力而为"。
+4. **错误码跨进程不失真**。`A2AError::from_rpc(code, message)` 能从远端返回的错误码还原错误类型，`-32002`（任务不可取消）在客户端仍然是"不可取消"，而不是笼统的"内部错误"。
+
+**沉淀**：一个既能被外部系统发现和调用、又能主动调用远端 agent 的双向协议层。
+
+---
+
+### 阶段 ⑲ 终端分层重构：`main.rs` 只管生命周期
+
+**问题**：`src/main.rs` 在 A2A 接入后膨胀到 758 行，混杂了工具箱装配、agent 树构造、MCP/记忆库/知识库初始化、A2A 服务端启动、斜杠命令分发、终端渲染、帮助文本——七种关注点挤在一个文件里。每次加能力都要在同一个文件里找位置。
+
+**实现细节**：拆成 `src/app/` 目录，`main.rs` 只剩"解析参数 → 组装应用 → REPL 循环 → 退出"：
+
+```
+src/app/
+├── mod.rs        ── App / Features 数据结构，模块入口
+├── builder.rs    ── 组装工具箱、agent 树、可选能力
+├── prompts.rs    ── 各 agent 的系统提示词
+├── a2a.rs        ── A2A 配置、服务端启动、远端 peer 发现
+├── turn.rs       ── 执行一个用户回合（含工具审批）
+├── commands.rs   ── 斜杠命令处理
+├── render.rs     ── 终端渲染（颜色 / Markdown / 横幅）
+└── help.rs       ── 帮助文本
+```
+
+同时把 **Agent 树**从 `src/agent/model.rs` 抽到 `src/agent/tree.rs`（`model.rs` 一度有 424 行，且同时承担"行为"与"拓扑"两种关注点）。`tree.rs` 负责 `set_sub_agents` 的组树校验（重名、双父、环形引用）与转移目标计算（子 + 父 + 兄弟）。
+
+```mermaid
+flowchart TD
+    M["main.rs<br/>进程生命周期"] --> B["app::builder::build_app&#40;&#41;"]
+    B --> T1["工具箱（MCP + 本地工具）"]
+    B --> T2["可选能力（记忆库 / 知识库）"]
+    B --> T3["A2A peer 发现<br/>必须早于 agent 构造"]
+    T3 --> T4["agent 树<br/>researcher / math / coder → assistant"]
+    T4 --> T5["A2A 服务端<br/>一次性模式跳过"]
+    M --> L["REPL 循环"]
+    L --> C["/xxx → app::commands"]
+    L --> R["问题 → app::turn::run_turn"]
+```
+
+**为什么 peer 发现必须早于 agent 构造**：工具箱是 `Arc<HashMap>`，agent 一旦建好，工具就固定了，没法再往里塞远端 agent 工具。这个顺序约束写在了 `builder.rs` 的模块注释里，避免后人踩坑。
+
+**沉淀**：一个"入口只做装配、业务各归其位"的终端应用骨架；新增一项能力只需要在 `builder.rs` 里加一段、在 `commands.rs` 里加一条命令。
+
+---
+
 ### 演进规律总结
 
-把 17 个阶段串起来看，有五条贯穿始终的技术规律：
+把 19 个阶段串起来看，有六条贯穿始终的技术规律：
 
 **规律一：先立契约，再填实现。** 每个阶段都先定义 trait（`Tool`、`SessionManager`、`CodeExecutor`、`AgentNode`、`SandboxTool`），实现可以后补、可以替换。这让 `ToolBox` 里既有本地工具、又有 MCP 工具、又有 Agent-as-Tool，对 Agent 而言毫无区别。
 
@@ -1034,6 +1133,8 @@ pub struct SkillInfo {
 **规律四：失败偏向可用。** 查重失败 → 继续存储；记忆检索出错 → 不缓存下次重试；MCP 起不来 → 回退基础工具集；沙箱不可用 → 关闭代码执行但保留对话。辅助能力失败不应该拖垮主流程。
 
 **规律五：一切可观测。** 从 ep07 的 `tracing` 日志，到 ep08 的审批回调输出，到 ep14 的 `/status` `/agents` `/history` 命令，到每一步的 `transfer_history` 路径记录。Agent 的多步行为本质上是黑盒，不给观察窗口就无法调试。
+
+**规律六：能力先声明，再执行。** MCP 的工具靠 JSON Schema 自描述；A2A 的能力靠 Agent Card 的 `capabilities` 自描述——未声明 `streaming` 就返回 `-32004`，而不是"试试看"。声明与执行分离，是跨进程协作不产生误解的前提。
 
 ### 技术选型速查
 
@@ -1049,6 +1150,9 @@ pub struct SkillInfo {
 | 沙箱        | Podman                        | rootless 容器，网络默认关闭，根文件系统只读         |
 | Token 计数  | `tiktoken-rs`                 | 与主流模型 tokenizer 一致，阈值判断可靠             |
 | 终端渲染    | `termimad`                    | 终端内 Markdown 渲染，不侵入 alternate screen       |
+| A2A 服务端  | `axum`                        | 轻量异步 HTTP 框架，原生支持 SSE 流式响应           |
+| A2A 流式    | `async-stream` + `mpsc`       | 把 agent 的执行过程转成 SSE 事件流                  |
+| 密钥比对    | `subtle`                      | 常量时间比较，避免响应耗时侧信道逐字节猜密钥        |
 
 ---
 
@@ -1121,6 +1225,8 @@ flowchart LR
 | 沙箱     | `src/sandbox/podman.rs` + `bridge.rs`                         | 容器隔离 + 宿主工具回调                  |
 | 多智能体 | `src/multi_agent/workflow/`                                   | 串行 / 并行 / 循环三种编排               |
 | 技能     | `src/skill.rs`                                                | 只注入 name/description 的渐进式披露     |
+| A2A      | `src/a2a/{types,card,jsonrpc}.rs`                             | 协议数据模型 + 自描述清单 + RPC 信封     |
+| 终端组装 | `src/app/builder.rs` + `src/agent/tree.rs`                    | 依赖装配顺序 + Agent 树的组树校验        |
 
 ### 容易踩坑的四个点
 
@@ -1148,34 +1254,37 @@ flowchart TD
 
 ## 图解总览
 
-全篇用 30+ 张图串起整个项目。建议按下表顺序阅读：
+全篇用 50+ 张图串起整个项目。建议按下表顺序阅读：
 
-| #   | 图                            | 所在小节                              | 类型            | 回答什么问题                       |
-| --- | ----------------------------- | ------------------------------------- | --------------- | ---------------------------------- |
-| 1   | 演进主线时间线                | [技术演进流程](#技术演进流程)         | timeline        | 15 个阶段怎么走过来的？            |
-| 2   | 项目全景脑图                  | [项目全景脑图](#项目全景脑图)         | mindmap         | 这个项目有哪些部分？               |
-| 3   | 模块依赖关系图                | [分层架构图](#分层架构图)             | flowchart       | 模块之间怎么依赖？                 |
-| 4   | 层级职责速览                  | [分层架构图](#分层架构图)             | flowchart       | 五层职责怎么划？                   |
-| 5   | Agent 主流程（入口 + 主循环） | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `run()` 前后做了什么？             |
-| 6   | Agent 状态机                  | [Agent 运行主流程](#agent-运行主流程) | stateDiagram    | `run()` 可能返回哪些状态？         |
-| 7   | 单步决策树                    | [Agent 运行主流程](#agent-运行主流程) | flowchart       | LLM 响应三种分支分别怎么走？       |
-| 8   | 工具执行细节                  | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `act.rs` 里发生了什么？            |
-| 9   | 工具确认时序图                | [Agent 运行主流程](#agent-运行主流程) | sequenceDiagram | 人工审批如何跨两次 `run()`？       |
-| 10  | 回调三个扩展点                | [回调机制](#回调机制callback)         | flowchart       | 回调能改写什么？                   |
-| 11  | 回调顺序对比                  | [回调机制](#回调机制callback)         | flowchart       | 为什么记忆注入要在优化前？         |
-| 12  | `Tool` trait 装配             | [工具系统](#工具系统)                 | flowchart       | schema 怎么变成 LLM 的 tools？     |
-| 13  | 工具来源分类                  | [工具系统](#工具系统)                 | flowchart       | 内置/沙箱/MCP/Agent 工具怎么统一？ |
-| 14  | `final_answer` 终局判定       | [工具系统](#工具系统)                 | flowchart       | 什么时候算"答完了"？               |
-| 15  | `build_toolbox()` 组装        | [工具系统](#工具系统)                 | flowchart       | 工具从哪来？                       |
-| 16  | MCP 动态工具时序              | [工具系统](#工具系统)                 | sequenceDiagram | 子进程 MCP 怎么跑？                |
-| 17  | 记忆写入 / 读取流程           | [长期记忆系统](#长期记忆系统)         | flowchart       | 记忆怎么存、怎么查？               |
-| 18  | 记忆闭环时序                  | [长期记忆系统](#长期记忆系统)         | sequenceDiagram | 写入→检索→注入完整链路？           |
-| 19  | 上下文优化四种手段            | [上下文优化器](#上下文优化器)         | flowchart       | token 超了怎么办？                 |
-| 20  | 核心类型关系图                | [会话与事件模型](#会话与事件模型)     | classDiagram    | 类型之间什么关系？                 |
-| 21  | GAIA 评测流程                 | [GAIA 基准评测](#gaia-基准评测)       | flowchart       | 有/无工具如何对照？                |
-| 22  | RAG 检索管线                  | [模块详解](#模块详解)                 | flowchart       | 切片→向量化→排序怎么做？           |
-| 23  | 沙箱宿主桥接时序              | [模块详解](#模块详解)                 | sequenceDiagram | 沙箱里的代码怎么回调宿主工具？     |
-| 24  | 三种工作流上下文语义          | [模块详解](#模块详解)                 | flowchart       | 串行/并行/循环怎么共享上下文？     |
+| #   | 图                            | 所在小节                              | 类型            | 回答什么问题                        |
+| --- | ----------------------------- | ------------------------------------- | --------------- | ----------------------------------- |
+| 1   | 演进主线时间线                | [技术演进流程](#技术演进流程)         | timeline        | 19 个阶段怎么走过来的？             |
+| 2   | 项目全景脑图                  | [项目全景脑图](#项目全景脑图)         | mindmap         | 这个项目有哪些部分？                |
+| 3   | 模块依赖关系图                | [分层架构图](#分层架构图)             | flowchart       | 模块之间怎么依赖？                  |
+| 4   | 层级职责速览                  | [分层架构图](#分层架构图)             | flowchart       | 六层职责怎么划？                    |
+| 5   | Agent 主流程（入口 + 主循环） | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `run()` 前后做了什么？              |
+| 6   | Agent 状态机                  | [Agent 运行主流程](#agent-运行主流程) | stateDiagram    | `run()` 可能返回哪些状态？          |
+| 7   | 单步决策树                    | [Agent 运行主流程](#agent-运行主流程) | flowchart       | LLM 响应三种分支分别怎么走？        |
+| 8   | 工具执行细节                  | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `act.rs` 里发生了什么？             |
+| 9   | 工具确认时序图                | [Agent 运行主流程](#agent-运行主流程) | sequenceDiagram | 人工审批如何跨两次 `run()`？        |
+| 10  | 回调三个扩展点                | [回调机制](#回调机制callback)         | flowchart       | 回调能改写什么？                    |
+| 11  | 回调顺序对比                  | [回调机制](#回调机制callback)         | flowchart       | 为什么记忆注入要在优化前？          |
+| 12  | `Tool` trait 装配             | [工具系统](#工具系统)                 | flowchart       | schema 怎么变成 LLM 的 tools？      |
+| 13  | 工具来源分类                  | [工具系统](#工具系统)                 | flowchart       | 内置/沙箱/MCP/Agent 工具怎么统一？  |
+| 14  | `final_answer` 终局判定       | [工具系统](#工具系统)                 | flowchart       | 什么时候算"答完了"？                |
+| 15  | `build_toolbox()` 组装        | [工具系统](#工具系统)                 | flowchart       | 工具从哪来？                        |
+| 16  | MCP 动态工具时序              | [工具系统](#工具系统)                 | sequenceDiagram | 子进程 MCP 怎么跑？                 |
+| 17  | 记忆写入 / 读取流程           | [长期记忆系统](#长期记忆系统)         | flowchart       | 记忆怎么存、怎么查？                |
+| 18  | 记忆闭环时序                  | [长期记忆系统](#长期记忆系统)         | sequenceDiagram | 写入→检索→注入完整链路？            |
+| 19  | 上下文优化四种手段            | [上下文优化器](#上下文优化器)         | flowchart       | token 超了怎么办？                  |
+| 20  | 核心类型关系图                | [会话与事件模型](#会话与事件模型)     | classDiagram    | 类型之间什么关系？                  |
+| 21  | GAIA 评测流程                 | [GAIA 基准评测](#gaia-基准评测)       | flowchart       | 有/无工具如何对照？                 |
+| 22  | RAG 检索管线                  | [模块详解](#模块详解)                 | flowchart       | 切片→向量化→排序怎么做？            |
+| 23  | 沙箱宿主桥接时序              | [模块详解](#模块详解)                 | sequenceDiagram | 沙箱里的代码怎么回调宿主工具？      |
+| 24  | 三种工作流上下文语义          | [模块详解](#模块详解)                 | flowchart       | 串行/并行/循环怎么共享上下文？      |
+| 25  | 终端组装顺序                  | [终端应用组装层](#终端应用组装层)     | flowchart       | 为什么 peer 发现要早于 agent 构造？ |
+| 26  | 一个回合的状态机              | [终端应用组装层](#终端应用组装层)     | flowchart       | 审批挂起后怎么恢复？                |
+| 27  | A2A 与终端应用的集成          | [A2A 协议](#a2a-协议agent2agent)      | flowchart       | 两个方向怎么接进来的？              |
 
 > **图例约定**：
 > 🟦 蓝 = 入口/数据流　🟧 橙 = Agent 编排　🟪 紫 = 扩展点/回调　🟩 绿 = 能力模块　🟥 红 = 错误/失败路径
@@ -1191,7 +1300,13 @@ mindmap
       main.rs
         终端交互式 Agent
         行式 REPL
-        Agent 树装配
+        只管进程生命周期
+      app/
+        builder 依赖装配
+        a2a 服务端 + peer 发现
+        turn 回合执行
+        commands 斜杠命令
+        render 终端渲染
       bin/gaia.rs
         GAIA 基准评测
         有工具 vs 无工具
@@ -1209,6 +1324,14 @@ mindmap
         记忆闭环
       examples/sandbox.rs
         沙箱代码执行
+      examples/a2a_demo.rs
+        A2A 协议端到端
+      examples/a2a_serve.rs
+        A2A 服务端
+      examples/a2a_client.rs
+        A2A 外部客户端
+      examples/a2a_auth.rs
+        A2A 鉴权测试
     Agent 编排层
       model.rs
         Agent 结构体
@@ -1231,6 +1354,9 @@ mindmap
         确认挂起
         转移拦截
         前后置回调
+      tree.rs
+        set_sub_agents 组树校验
+        转移目标 = 子 + 父 + 兄弟
       context.rs
         ExecutionContext
         transfer_to / transfer_count
@@ -1296,6 +1422,30 @@ mindmap
         sequential
         parallel
         loop
+    A2A 协议层
+      Agent Card
+        skills 自描述能力
+        securitySchemes
+      jsonrpc
+        PascalCase 方法名
+        HTTP 头服务参数
+      error
+        A2A 错误 → JSON-RPC 码
+      server
+        /.well-known/agent-card.json
+        POST /rpc
+        SSE 流式
+      client
+        discover / send_text
+        多轮自动续用 contextId
+      client_tool
+        A2ATool 跨进程委派
+      task_store
+        InMemory / Session 桥接
+        任务状态机
+      auth
+        Bearer Token
+        常量时间比较
     沙箱层
       config 环境变量开关
       podman 容器执行器
@@ -1369,6 +1519,7 @@ mindmap
 flowchart TB
     subgraph ENTRY["入口层 src/ · src/bin/ · examples/"]
         MAIN["main.rs<br/>终端交互式 Agent"]
+        APP["app/<br/>builder / turn / commands / render"]
         GAIA["bin/gaia.rs<br/>GAIA 评测"]
         MCPBIN["bin/wikipedia_mcp_server.rs"]
         EX1["examples/web_rag.rs"]
@@ -1377,10 +1528,12 @@ flowchart TB
         EX4["examples/memory_demo.rs"]
         EX5["examples/sandbox.rs"]
         EX6["examples/knowledge_demo.rs<br/>examples/hybrid_search_demo.rs"]
+        EX7["examples/a2a_demo.rs<br/>a2a_serve / a2a_client / a2a_auth"]
     end
 
     subgraph AGENT["Agent 编排层 src/agent/"]
-        MODEL["model.rs<br/>Agent / 回调注册 / Agent 树"]
+        MODEL["model.rs<br/>Agent / 回调注册"]
+        TREE["tree.rs<br/>Agent 树 / 转移目标"]
         RUNTIME["runtime.rs<br/>主循环 + 转移交接"]
         STEP["runtime/step.rs<br/>单步编排"]
         THINK["runtime/think.rs"]
@@ -1393,6 +1546,16 @@ flowchart TB
     subgraph MULTI["多智能体层 src/multi_agent/"]
         MA["node.rs<br/>AgentNode trait"]
         MWF["workflow/<br/>sequential / parallel / loop"]
+    end
+
+    subgraph A2A["A2A 协议层 src/a2a/"]
+        ATYPES["types/<br/>Task / Message / Part"]
+        ACARD["card/<br/>Agent Card / Skill"]
+        ARPC["jsonrpc.rs + error.rs"]
+        ASRV["server/<br/>dispatch / executor / streaming"]
+        ACLI["client.rs + client_tool.rs"]
+        ASTORE["task_store/<br/>存储 + 状态机"]
+        AAUTH["auth.rs<br/>Bearer Token"]
     end
 
     subgraph CALLBACK["回调层 src/agent/callback/"]
@@ -1408,6 +1571,7 @@ flowchart TB
         KTOOL["knowledge_tool.rs<br/>search_knowledge / add_knowledge"]
         CODET["code/<br/>execute_python / bash / upload"]
         AGTT["agent_tool.rs<br/>Agent-as-Tool"]
+        A2ATOOL["a2a/client_tool.rs<br/>A2A 远端 Agent 工具"]
         TRF["transfer.rs<br/>transfer_to_agent"]
         MCPC["mcp/client.rs<br/>mcp/mcp_tool.rs"]
     end
@@ -1471,6 +1635,13 @@ flowchart TB
         GH["GitHub API"]
     end
 
+    MAIN --> APP
+    APP --> AGENT
+    APP --> MEMORY
+    APP --> TOOLS
+    APP --> SANDBOX
+    APP --> MULTI
+    APP --> A2A
     MAIN --> AGENT
     MAIN --> MEMORY
     MAIN --> TOOLS
@@ -1487,6 +1658,8 @@ flowchart TB
     EX4 --> MEMORY
     EX5 --> SANDBOX
     EX6 --> KNOW
+    EX7 --> A2A
+    EX7 --> AGENT
     MCPBIN -.stdio.-> MCPC
 
     AGENT --> CALLBACK
@@ -1494,6 +1667,7 @@ flowchart TB
     AGENT --> LLM
     AGENT --> SESSION
     AGENT --> MULTI
+    MODEL --> TREE
 
     MODEL --> TOOL
     RUNTIME --> STEP
@@ -1513,12 +1687,28 @@ flowchart TB
     TOOL --> CODET
     TOOL --> AGTT
     TOOL --> KTOOL
+    TOOL --> A2ATOOL
     MODEL --> TRF
     BUILTIN --> TAVILY
     BUILTIN --> GH
     MCPC --> MCPSRV
     AGTT --> AGENT
     KTOOL --> KBMGR
+
+    A2A --> AGENT
+    A2A --> SESSION
+    ACARD --> ATYPES
+    ARPC --> ATYPES
+    ASRV --> ARPC
+    ASRV --> ACARD
+    ASRV --> ASTORE
+    ASRV --> AGENT
+    ASRV --> AAUTH
+    ACLI --> ARPC
+    ACLI --> ACARD
+    ASTORE --> ATYPES
+    ACLI -.-> A2ATOOL
+    A2ATOOL -.-> ASRV
 
     CODET --> SANDBOX
     SANDBOX --> PODMAN
@@ -1563,14 +1753,16 @@ flowchart TB
     classDef mem fill:#ffe8ec,stroke:#d6405f
     classDef llm fill:#e6f7f7,stroke:#17a2b8
     classDef ext fill:#f5f5f5,stroke:#888
+    classDef a2a fill:#e8f4ff,stroke:#4a90d9,stroke-width:2px
 
-    class MAIN,GAIA,MCPBIN,EX1,EX2,EX3,EX4,EX5,EX6 entry
-    class MODEL,RUNTIME,STEP,THINK,ACT,CTX,EVENT,CONF,MA,MWF agent
+    class MAIN,APP,GAIA,MCPBIN,EX1,EX2,EX3,EX4,EX5,EX6,EX7 entry
+    class MODEL,TREE,RUNTIME,STEP,THINK,ACT,CTX,EVENT,CONF,MA,MWF agent
     class MEM,OPT,APPROVAL,COMP cb
-    class TOOL,BUILTIN,MCPC,CODET,AGTT,TRF,SBOX,SBRIDGE,SCFG,KTOOL tool
+    class TOOL,BUILTIN,MCPC,CODET,AGTT,A2ATOOL,TRF,SBOX,SBRIDGE,SCFG,KTOOL tool
     class MGR,STORE,MEMPROMPT mem
     class KBMGR,KBSTORE,KBMODEL,KBEMB,KBIDX,KBTOK,KBHYB tool
     class ASK,REQ,ANS,SEM llm
+    class ATYPES,ACARD,ARPC,ASRV,ACLI,ASTORE,AAUTH a2a
     class GATEWAY,MCPSRV,TAVILY,HF,DB,PODMAN,GH ext
 ```
 
@@ -1578,28 +1770,33 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    L1["入口层<br/>main / gaia / examples"]
+    L1["入口层<br/>main / app / gaia / examples"]
     L2["编排层<br/>src/agent"]
     L3["扩展层<br/>callback / tool"]
     L4["能力层<br/>memory / llm / search / session"]
-    L5["基础设施<br/>constant / 外部服务"]
+    L5["协议层<br/>src/a2a"]
+    L6["基础设施<br/>constant / 外部服务"]
 
-    L1 --> L2 --> L3 --> L4 --> L5
+    L1 --> L2 --> L3 --> L4
+    L2 --> L5
+    L5 --> L4
 
     style L1 fill:#e8f4ff
     style L2 fill:#fff4e6
     style L3 fill:#e8f8f0
     style L4 fill:#f0e8ff
-    style L5 fill:#f5f5f5
+    style L5 fill:#e8f4ff
+    style L6 fill:#f5f5f5
 ```
 
-| 层       | 位置                                                                                                        | 职责                     | 关键规则                     |
-| -------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ | ---------------------------- |
-| 入口层   | `src/main.rs`、`src/bin/`、`examples/`                                                                      | 装配依赖、驱动场景       | 不写业务逻辑，只做装配       |
-| 编排层   | `src/agent/`、`src/multi_agent/`                                                                            | 控制"想 → 做 → 判"的循环 | 只依赖 trait，不依赖具体实现 |
-| 扩展层   | `src/agent/callback/`、`src/tool/`                                                                          | 提供可插拔能力点         | 全部通过 trait 注册          |
-| 能力层   | `src/memory/`、`src/llm/`、`src/search/`、`src/knowledge/`、`src/session/`、`src/sandbox/`、`src/planning/` | 提供具体能力             | 相互之间尽量不横向依赖       |
-| 基础设施 | `src/constant.rs`、`src/skill.rs`、外部服务                                                                 | 配置与 IO                | 配置不硬编码在业务代码       |
+| 层       | 位置                                                                                                        | 职责                     | 关键规则                       |
+| -------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------ |
+| 入口层   | `src/main.rs`、`src/app/`、`src/bin/`、`examples/`                                                          | 装配依赖、驱动场景       | 不写业务逻辑，只做装配         |
+| 编排层   | `src/agent/`、`src/multi_agent/`                                                                            | 控制"想 → 做 → 判"的循环 | 只依赖 trait，不依赖具体实现   |
+| 扩展层   | `src/agent/callback/`、`src/tool/`                                                                          | 提供可插拔能力点         | 全部通过 trait 注册            |
+| 能力层   | `src/memory/`、`src/llm/`、`src/search/`、`src/knowledge/`、`src/session/`、`src/sandbox/`、`src/planning/` | 提供具体能力             | 相互之间尽量不横向依赖         |
+| 协议层   | `src/a2a/`                                                                                                  | 跨进程暴露与调用 Agent   | 只暴露能力声明，不暴露内部过程 |
+| 基础设施 | `src/constant.rs`、`src/skill.rs`、外部服务                                                                 | 配置与 IO                | 配置不硬编码在业务代码         |
 
 ---
 
@@ -1860,16 +2057,17 @@ flowchart LR
 
 ### `src/agent/` — Agent 编排
 
-| 文件                   | 职责                                                                                                                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model.rs`             | `Agent` 结构体、回调注册 builder（`with_max_steps` / `with_before_llm_callbacks` 等）、`prepare_llm_request`、`process_confirmations`、Agent 树（`set_sub_agents` / `transfer_targets`）、`AgentResult<T>`、`AgentStatus` |
-| `runtime.rs`           | 主循环、步数上限保护、转移交接、最终结果反序列化                                                                                                                                                                          |
-| `runtime/step.rs`      | 单步编排：`think` → 分支决策 → `act_all` → 终局判定                                                                                                                                                                       |
-| `runtime/think.rs`     | 组装 `CreateChatCompletionRequestArgs`（model / max_tokens=2048 / tools / tool_choice）并发起调用                                                                                                                         |
-| `runtime/act.rs`       | 工具调用执行、确认挂起、转移工具拦截、前后置回调调用、事件写入                                                                                                                                                            |
-| `context.rs`           | `ExecutionContext`：`execution_id` / `current_step` / `final_result` / `session` / `transfer_to` / `transfer_count` / `transfer_history`                                                                                  |
-| `event.rs`             | `AgentEvent`（事件信封）与 `ContentItem`（`Message` / `ToolCall` / `ToolResult`）、`ToolResultStatus`                                                                                                                     |
-| `tool_confirmation.rs` | `PendingToolCall`（挂起项）、`ToolConfirmation`（审批结果）                                                                                                                                                               |
+| 文件                   | 职责                                                                                                                                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.rs`             | `Agent` 结构体、回调注册 builder（`with_max_steps` / `with_before_llm_callbacks` 等）、`prepare_llm_request`、`process_confirmations`、`AgentResult<T>`、`AgentStatus` |
+| `tree.rs`              | Agent 树：`set_sub_agents` 组树校验（重名 / 双父 / 环形）、`transfer_targets`（子 + 父 + 兄弟）、`find_transfer_target`                                                |
+| `runtime.rs`           | 主循环、步数上限保护、转移交接、最终结果反序列化                                                                                                                       |
+| `runtime/step.rs`      | 单步编排：`think` → 分支决策 → `act_all` → 终局判定                                                                                                                    |
+| `runtime/think.rs`     | 组装 `CreateChatCompletionRequestArgs`（model / max_tokens=2048 / tools / tool_choice）并发起调用                                                                      |
+| `runtime/act.rs`       | 工具调用执行、确认挂起、转移工具拦截、前后置回调调用、事件写入                                                                                                         |
+| `context.rs`           | `ExecutionContext`：`execution_id` / `current_step` / `final_result` / `session` / `transfer_to` / `transfer_count` / `transfer_history`                               |
+| `event.rs`             | `AgentEvent`（事件信封）与 `ContentItem`（`Message` / `ToolCall` / `ToolResult`）、`ToolResultStatus`                                                                  |
+| `tool_confirmation.rs` | `PendingToolCall`（挂起项）、`ToolConfirmation`（审批结果）                                                                                                            |
 
 `Agent` 的 builder 风格让装配非常直观：
 
@@ -2443,6 +2641,38 @@ To use a skill:
 
 ---
 
+### `src/a2a/` — A2A 协议层
+
+详细说明见 [A2A 协议（Agent2Agent）](#a2a-协议agent2agent)，这里只列文件职责：
+
+| 文件                    | 职责                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `types.rs` + `types/`   | `Task` / `TaskStatus` / `TaskState` / `Message` / `Part` / `Role` / `Artifact` / 流式事件 |
+| `error.rs`              | `A2AError`（13 个变体）↔ JSON-RPC 错误码双向映射、`from_rpc` 还原语义                     |
+| `jsonrpc.rs`            | `JsonRpcRequest` / `JsonRpcResponse`、方法名常量、HTTP 头服务参数解析                     |
+| `card.rs` + `card/`     | `AgentCard`、从 `Agent` 自动生成、`securitySchemes` 声明                                  |
+| `auth.rs`               | `Authenticator` trait、`BearerTokenAuthenticator`（常量时间比较）                         |
+| `task_store.rs` + `/`   | `TaskStore` trait、`InMemoryTaskStore`、`SessionTaskStore`、`TaskLifecycle`               |
+| `server.rs` + `server/` | `A2AServer` / `A2AServerState` 路由装配、方法分派、协议↔runtime 桥、SSE                   |
+| `client.rs`             | `A2AClient`：`discover` / `send_text` / `send_streaming` / `get_task` / `cancel_task`     |
+| `client_tool.rs`        | `A2ATool`：把远端 agent 包装成本地 `Tool`（schema 来自对方 Agent Card）                   |
+| `sse.rs`                | SSE 帧解析，服务端与客户端共用同一套规则                                                  |
+
+### `src/app/` — 终端组装层
+
+| 文件          | 职责                                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `mod.rs`      | `App`（运行时状态）、`Features`（能力探测结果）、模块入口                                    |
+| `builder.rs`  | 组装工具箱、agent 树、三个回调、可选能力、A2A 两端                                           |
+| `prompts.rs`  | `ROOT_INSTRUCTIONS` / `RESEARCHER_INSTRUCTIONS` / `MATH_INSTRUCTIONS` / `CODER_INSTRUCTIONS` |
+| `a2a.rs`      | `A2AConfig::from_env`、`start_server`、`discover_peers`、`attach_peers`                      |
+| `turn.rs`     | `run_turn`：回合状态机、工具审批询问与恢复、答案渲染                                         |
+| `commands.rs` | 斜杠命令分发（查询 / 变更 / 控制三类）                                                       |
+| `render.rs`   | `styled` 着色、`render_markdown`（termimad）、横幅、`status_text`                            |
+| `help.rs`     | `HELP` 常量：`/help` 与 `--help` 的内容                                                      |
+
+---
+
 ## 回调机制（Callback）
 
 框架在三个时机提供回调扩展点，均为 `Arc<dyn Trait>`，注册顺序即执行顺序，且**一旦某个回调返回 `Some` 就短路**。
@@ -2720,6 +2950,292 @@ sequenceDiagram
     MT-->>A: 工具结果字符串
     A->>A: 记 ToolResult 事件
 ```
+
+---
+
+## A2A 协议（Agent2Agent）
+
+本项目实现了 [A2A 协议](https://a2a-protocol.org) 的 **JSON-RPC over HTTP** 绑定，让 Agent 既能作为 A2A **服务端**被外部系统发现和调用，也能作为 A2A **客户端**去调用远端的 Agent。
+
+### A2A 与 MCP 的分工
+
+这是两个最容易混淆的概念，本项目里两者并存：
+
+|            | MCP                  | A2A                               |
+| ---------- | -------------------- | --------------------------------- |
+| 解决什么   | Agent 怎么调**工具** | Agent 怎么和**另一个 Agent** 对话 |
+| 对端是什么 | 被动的函数（无状态） | 自主体（有自己的模型与工具）      |
+| 能力描述   | 工具的 JSON Schema   | Agent Card 里的 **Skill**         |
+| 传输       | stdio / HTTP         | HTTP + JSON-RPC（SSE 流式）       |
+| 本项目模块 | `src/tool/mcp/`      | `src/a2a/`                        |
+
+类比：MCP 是 Agent 调用**函数**；A2A 是 Agent 调用**同事**（同事会自己判断、可能多轮沟通）。
+
+### 端到端流程
+
+```
+  服务端 A                                      客户端 B
+  ────────                                      ────────
+  GET /.well-known/agent-card.json  ◄────────────┤  discover()
+        │                                        │
+        └──► AgentCard{name, description,        │
+             skills[], capabilities,              │
+             supportedInterfaces[]}               │
+                                                 │
+  POST /rpc  {method:"SendMessage"}  ◄───────────┤  send_text()
+        │                                        │
+        ├──▶ Agent::run_in_context()             │
+        │                                        │
+        └──► {result:{task:{status, artifacts}}}  │
+                                                 │
+  POST /rpc  {method:"GetTask"}      ◄───────────┤  get_task()
+        └──► {result:{task:{...}}}               │
+```
+
+### 快速上手
+
+服务端：
+
+```rust
+use zephyr::a2a::server::A2AServer;
+
+let agent = std::sync::Arc::new(Agent::new(model, instructions, toolbox));
+// rpc_url 必须是可直接调用的 JSON-RPC 端点（规范要求卡片里就是这个地址）
+let server = A2AServer::from_agent(agent, "http://127.0.0.1:8080/rpc", "0.1.0")?;
+server.serve("127.0.0.1:8080".parse()?).await?;
+```
+
+客户端：
+
+```rust
+use zephyr::a2a::client::A2AClient;
+
+let client = A2AClient::discover("http://127.0.0.1:8080").await?;
+let task = client.send_text("用一句话解释什么是 TCP 三次握手").await?;
+```
+
+把远端 A2A Agent 变成本地工具（与 `AgentTool` 的进程内调用并列）：
+
+```rust
+use zephyr::a2a::client_tool::A2ATool;
+
+let tool = A2ATool::new(A2AClient::discover("http://remote:8080").await?);
+toolbox.insert("expert".to_owned(), Box::new(tool));
+```
+
+### 规范一致性
+
+实现严格遵循 A2A 规范 v1.0 的关键约束：
+
+| 规范条目          | 实现                                                                      |
+| ----------------- | ------------------------------------------------------------------------- |
+| 5.5 JSON 字段命名 | 全部 **camelCase**（`contextId` / `messageId` / `defaultInputModes`）     |
+| 5.5 枚举值        | **SCREAMING_SNAKE_CASE**（`TASK_STATE_WORKING` / `ROLE_USER`）            |
+| 5.6.1 时间戳      | ISO 8601 UTC 毫秒精度（`2026-01-01T00:00:00.000Z`）                       |
+| 4.1.6 Part        | OneOf：`text` / `raw` / `url` / `data` 只允许一个（用枚举建模守住不变量） |
+| 3.3.4 能力校验    | 未声明 `streaming` 时流式操作返回 `UnsupportedOperationError`（`-32004`） |
+| 3.2.4 历史长度    | `historyLength` 的三态语义（不限 / 0 / n）                                |
+| 5.4 错误码        | 9 个 A2A 错误到 JSON-RPC 错误码的完整映射，跨进程传输后语义不丢失         |
+| 8.2 / 14.3 发现   | `/.well-known/agent-card.json`                                            |
+| 9.2 服务参数      | `A2A-Version` / `A2A-Extensions` 通过 HTTP 头传递                         |
+| 9.4.2 流式        | SSE（`text/event-stream`），每事件是一个完整 JSON-RPC 信封                |
+
+### 与项目既有能力的关系
+
+```
+  Agent（进程内）                Agent（远程）
+  ──────────────                ──────────────
+  AgentTree / 父子关系           Agent Card / Skill
+  AgentTool（进程内委派）        A2ATool（跨进程委派）
+  Session（对话上下文）          Task + contextId（跨请求生命周期）
+  transfer_to_agent（交接）      SendMessage（远程调用）
+```
+
+A2A 的 `contextId` 复用项目的 `Session.session_id`，因此同一个上下文下的多轮消息天然共享对话历史——客户端会自动记住服务端分配的 `contextId` 并在下一轮带回。
+
+### 模块结构
+
+```
+src/a2a/
+├── types.rs                     # 数据模型入口
+├── types/
+│   ├── message.rs               # Message / Part / Role
+│   ├── task.rs                  # Task / TaskStatus / TaskState
+│   └── stream.rs                # 流式事件类型
+├── error.rs                     # A2A 错误 → JSON-RPC 错误码映射
+├── jsonrpc.rs                   # JSON-RPC 2.0 信封 + 方法名常量
+├── card.rs                      # Agent Card（自描述清单）
+├── card/
+│   ├── interface.rs             # AgentInterface / Capabilities / Provider
+│   ├── skill.rs                 # AgentSkill + 鉴权方案声明
+│   └── build.rs                 # 从项目 Agent 生成 skill 的映射
+├── auth.rs                      # HTTP Bearer Token 鉴权
+├── task_store.rs                # 任务存储（内存 + Session 桥接）
+├── task_store/
+│   └── lifecycle.rs             # 状态机 + 历史裁剪（纯函数）
+├── server.rs                    # 服务端：Agent Card + POST /rpc
+├── server/
+│   ├── dispatch.rs              # 方法分派
+│   ├── executor.rs              # 协议 ↔ runtime 桥
+│   └── streaming.rs             # SSE 响应
+├── client.rs                    # 客户端：发现 / 发消息 / 查任务
+├── client_tool.rs               # 把远端 A2A agent 包装成本地 Tool
+└── sse.rs                       # SSE 解析（服务端/客户端共用）
+```
+
+### 支持的 JSON-RPC 方法
+
+| 方法                   | 说明                                  | 流式 |
+| ---------------------- | ------------------------------------- | ---- |
+| `SendMessage`          | 发消息，阻塞执行 agent 或立即返回任务 | 否   |
+| `SendStreamingMessage` | 发消息并以 SSE 推送状态与产物         | 是   |
+| `GetTask`              | 按任务 id 查询状态与产物              | 否   |
+| `ListTasks`            | 按 `contextId` / 状态列出任务         | 否   |
+| `CancelTask`           | 取消尚未进入终态的任务                | 否   |
+| `SubscribeToTask`      | 订阅已有任务的流式更新                | 是   |
+| `GetExtendedAgentCard` | 返回扩展版 Agent Card                 | 否   |
+
+方法名用 **PascalCase**（JSON-RPC 绑定规范的要求），不是 REST 风格的 `send-message`。
+
+### 鉴权
+
+服务端可开启 HTTP Bearer Token 鉴权：
+
+```bash
+export ZEPHYR_A2A_TOKEN=secret
+```
+
+客户端相应地带上凭据：
+
+```rust
+let client = A2AClient::discover_with_auth("http://127.0.0.1:8899", "secret").await?;
+```
+
+鉴权行为：
+
+| 请求                                | 结果                    |
+| ----------------------------------- | ----------------------- |
+| `GET /.well-known/agent-card.json`  | **200**（卡片始终公开） |
+| `POST /rpc` 无 `Authorization` 头   | 401 + `-32010`          |
+| `POST /rpc` 错误的 token            | 401 + `-32010`          |
+| `POST /rpc` 非 `Bearer` 前缀        | 401 + `-32010`          |
+| `POST /rpc` 正确的 `Bearer <token>` | 200，正常执行 agent     |
+
+两个设计取舍：
+
+- **Agent Card 始终公开**。客户端要先拿到卡片才知道该用什么凭据（`securitySchemes` 就在卡片里）。若卡片也要鉴权，客户端就陷入"不知道要发什么头"的死结。因此只保护 `/rpc`。
+- **常量时间比较**。token 比对用 `subtle` crate 的常量时间算法，避免通过响应耗时侧信道逐字节猜测密钥。
+
+### 与终端应用的集成
+
+`src/app/a2a.rs` 把 A2A 接入终端应用，两个方向都是**可选能力**（任一环节失败只打印 warning，不影响主对话）：
+
+```mermaid
+flowchart LR
+    ENV["环境变量<br/>ZEPHYR_A2A_*"] --> CFG["A2AConfig::from_env&#40;&#41;"]
+    CFG --> PEER["discover_peers&#40;&#41;<br/>启动时发现远端"]
+    CFG --> SRV["start_server&#40;&#41;<br/>对外暴露根助手"]
+    PEER --> ATT["attach_peers&#40;&#41;<br/>包装成 A2ATool 挂进工具箱"]
+    ATT --> TOOLBOX["根助手工具箱"]
+    TOOLBOX --> ROOT["assistant agent"]
+    SRV --> ROOT
+```
+
+关键约束：**peer 发现必须早于 agent 构造**。工具箱是 `Arc<HashMap>`，agent 一旦建好，工具就固定了，没法再往里塞远端 agent 工具。
+
+远端 agent 的工具名取自对方 Agent Card 的 `name`，但**必须去重**：远端 agent 可能与本地 agent 同名（本项目根助手就叫 `assistant`），多个 peer 之间也可能同名。冲突时追加 `-2`、`-3` 后缀，且**不覆盖**已有工具——覆盖会让某个远端 agent 凭空消失，极难排查。
+
+一次性模式（`cargo run -- "问题"`）**不启动** A2A 服务端：进程马上就要退出，服务端来不及被任何人调用，只是白占一个端口。但 peer 接入不受影响——那是为了让本次回答能跨进程委派。`/a2a` 命令会如实区分"未启动"与"一次性模式不启动"。
+
+### 演示
+
+四个示例，分别回答不同的问题：
+
+| 示例         | 角色                          | 回答什么问题                                 |
+| ------------ | ----------------------------- | -------------------------------------------- |
+| `a2a_demo`   | 客户端 + 服务端在同一进程     | A2A 协议实现本身是否正确                     |
+| `a2a_serve`  | 只做服务端，复用完整 agent 树 | 本系统的 agent runtime 在 A2A 下能否正常工作 |
+| `a2a_client` | 纯外部客户端                  | 外部第三方系统能否真的把活儿派给本项目       |
+| `a2a_auth`   | 鉴权端到端                    | 开启 Bearer Token 后各条路径的行为是否正确   |
+
+```bash
+cargo run --example a2a_demo
+cargo run --example a2a_serve     # 另开终端
+cargo run --example a2a_client
+cargo run --example a2a_auth
+```
+
+`a2a_demo` 覆盖：Agent Card 发现 → 阻塞式 `SendMessage` → 多轮对话（自动续用 contextId）→ SSE 流式 → 远端 Agent 作为本地工具被委派 → `GetTask` / `ListTasks` / `CancelTask`。
+
+`a2a_serve` 复用与 `src/main.rs` 一致的完整 agent 树（assistant / researcher / math / coder），因此凡是经过 A2A 路径的执行都会真实走一遍 runtime——包括 agent 树转移、工具调用、上下文优化、长期记忆注入。
+
+---
+
+## 终端应用组装层
+
+`src/app/` 是终端应用的**组装层**。`src/main.rs` 只负责**进程的生命周期**：
+
+```text
+  解析参数 ──▶ 组装应用 ──▶ REPL 循环 ──▶ 退出
+```
+
+具体逻辑按职责拆进 `src/app/`：
+
+| 文件          | 职责                                  |
+| ------------- | ------------------------------------- |
+| `mod.rs`      | `App` / `Features` 数据结构，模块入口 |
+| `builder.rs`  | 组装工具箱、agent 树、可选能力        |
+| `prompts.rs`  | 各 agent 的系统提示词                 |
+| `a2a.rs`      | A2A 配置、服务端启动、远端 peer 发现  |
+| `turn.rs`     | 执行一个用户回合（含工具审批）        |
+| `commands.rs` | 斜杠命令处理                          |
+| `render.rs`   | 终端渲染（颜色 / Markdown / 横幅）    |
+| `help.rs`     | 帮助文本                              |
+
+### 组装顺序（顺序不可随意调换）
+
+```text
+  1. 工具箱         ── MCP 连接失败则回退到本地工具
+  2. 可选能力       ── 记忆库 / 知识库（失败只 warning）
+  3. 工具再分配     ── calculator → math，web_search → researcher
+  4. A2A peer 发现  ── 必须早于 agent 构造（工具箱建好就固定了）
+  5. agent 树       ── researcher / math / coder → assistant
+  6. A2A 服务端     ── 一次性模式跳过
+```
+
+### 失败策略
+
+除了"工具箱完全不可用"之外，所有可选能力的初始化失败都只打印 warning：
+
+```text
+  MCP 起不来      → warning + 回退 build_basic_toolbox&#40;&#41;
+  记忆库建不起来  → warning + 关闭 recall_memory
+  知识库建不起来  → warning + 关闭知识库工具
+  沙箱不可用      → warning + 关闭代码执行，保留对话
+  A2A peer 不可达 → warning + 其余 peer 照常接入
+  A2A 服务端起不来 → warning + 对话不受影响
+```
+
+一个 agent 框架不该因为记忆库建不起来就整个不能用。
+
+### 一个回合的状态机
+
+```
+  用户输入
+      │
+      ▼
+  run_in_context&#40;&#41;
+      │
+      ├── Complete ──────────────▶ 打印答案，保存会话，结束
+      │
+      ├── PendingConfirmation ───▶ 询问用户 → 写确认结果 → 继续跑
+      │        ▲                          │
+      │        └──────────────────────────┘
+      │
+      └── Error ─────────────────▶ 中断
+```
+
+审批轮次上限为 5，防止"确认一次又请求一次"的无限循环把会话卡死。
 
 ---
 
@@ -3601,6 +4117,18 @@ pub struct GaiaOutput {
 | `FINAL_ANSWER_TOOL_NAME`          | `final_answer`      | 终局工具名                                    |
 | `SYSTEM_INSTRUCTION`              | 长文本              | 面向儿童的学习助手系统提示词（11 节教学原则） |
 
+A2A 相关的配置常量（环境变量名、默认端口、发现路径）同样集中在这里：
+
+| 常量               | 当前值                         | 说明                                   |
+| ------------------ | ------------------------------ | -------------------------------------- |
+| `A2A_DEFAULT_HOST` | `127.0.0.1`                    | 服务端默认监听地址（仅本机）           |
+| `A2A_DEFAULT_PORT` | `8899`                         | 服务端默认监听端口                     |
+| `A2A_ENV_HOST`     | `ZEPHYR_A2A_HOST`              | 监听地址的环境变量名                   |
+| `A2A_ENV_PORT`     | `ZEPHYR_A2A_PORT`              | 监听端口的环境变量名                   |
+| `A2A_ENV_PEERS`    | `ZEPHYR_A2A_PEERS`             | 远端 peer 地址列表（逗号分隔）的变量名 |
+| `A2A_ENV_TOKEN`    | `ZEPHYR_A2A_TOKEN`             | Bearer Token 的环境变量名              |
+| `A2A_CARD_PATH`    | `/.well-known/agent-card.json` | Agent Card 发现路径                    |
+
 > **命名说明**：常量名沿用了"角色代号"风格（`GPT_6_LUNA_PRO` 等），但实际值是百炼网关的 Qwen 系列。修改时注意 `TaskMemoryManager` 的 embedding 模型也引用了 `TEXT_EMBEDDING_3_SMALL_MODEL`，改动需同步调用点。
 
 ### `SYSTEM_INSTRUCTION` 覆盖的教学原则
@@ -3627,18 +4155,33 @@ Zephyr/
 │   ├── hybrid_search_demo.rs          # 三种检索方式对比
 │   ├── planning.rs                     # 规划式研究助手
 │   ├── multi_agent.rs                  # 多智能体四种模式演示
-│   └── sandbox.rs                      # 沙箱代码执行示例
+│   ├── sandbox.rs                      # 沙箱代码执行示例
+│   ├── a2a_demo.rs                     # A2A 协议端到端演示
+│   ├── a2a_serve.rs                    # A2A 服务端（复用完整 agent 树）
+│   ├── a2a_client.rs                   # A2A 外部客户端
+│   └── a2a_auth.rs                     # A2A 鉴权端到端测试
 ├── sandbox/
 │   ├── Containerfile                   # 沙箱镜像定义
 │   └── runner.py                       # 沙箱内常驻进程（stdio JSON 协议）
 ├── src/
 │   ├── lib.rs                          # 模块导出
-│   ├── main.rs                         # 默认二进制：终端交互式 Agent
-│   ├── constant.rs                     # 模型名 / 工具名 / 系统提示词
+│   ├── main.rs                         # 默认二进制：只管进程生命周期
+│   ├── constant.rs                     # 模型名 / 工具名 / 系统提示词 / A2A 配置
 │   ├── skill.rs                        # SKILL.md 扫描与提示词生成
 │   │
+│   ├── app/                            # ── 终端组装层 ──
+│   │   ├── mod.rs                      # App / Features + 模块入口
+│   │   ├── builder.rs                  # 组装工具箱 / agent 树 / 可选能力
+│   │   ├── prompts.rs                  # 各 agent 的系统提示词
+│   │   ├── a2a.rs                      # A2A 配置 / 服务端启动 / peer 发现
+│   │   ├── turn.rs                     # 执行一个用户回合（含工具审批）
+│   │   ├── commands.rs                 # 斜杠命令处理
+│   │   ├── render.rs                   # 终端渲染（颜色 / Markdown / 横幅）
+│   │   └── help.rs                     # 帮助文本
+│   │
 │   ├── agent/                          # ── Agent 编排 ──
-│   │   ├── model.rs                    # Agent 结构体 + 回调注册 + Agent 树 + 请求准备
+│   │   ├── model.rs                    # Agent 结构体 + 回调注册 + 请求准备
+│   │   ├── tree.rs                     # Agent 树组装校验 + 转移目标计算
 │   │   ├── runtime.rs                  # 主循环 + 转移交接
 │   │   ├── runtime/step.rs             # 单步编排
 │   │   ├── runtime/think.rs            # LLM 调用
@@ -3715,6 +4258,33 @@ Zephyr/
 │   │   ├── model.rs                     # Document / Chunk / SearchHit
 │   │   └── embedder.rs                  # Embedder trait + 假实现
 │   │
+│   ├── a2a.rs
+│   ├── a2a/                             # ── A2A 协议 ──
+│   │   ├── types.rs                     # Task / Message / Part / Artifact
+│   │   ├── types/                       # 数据模型按概念拆分
+│   │   │   ├── message.rs               # Message / Part / Role
+│   │   │   ├── task.rs                  # Task / TaskStatus / TaskState
+│   │   │   └── stream.rs                # 流式事件类型
+│   │   ├── error.rs                     # A2A 错误 → JSON-RPC 错误码映射
+│   │   ├── jsonrpc.rs                   # JSON-RPC 2.0 信封 + 方法名常量
+│   │   ├── card.rs                      # Agent Card（自描述清单）
+│   │   ├── card/                        # 卡片周边类型
+│   │   │   ├── interface.rs             # AgentInterface / Capabilities / Provider
+│   │   │   ├── skill.rs                 # AgentSkill + 鉴权方案声明
+│   │   │   └── build.rs                 # 从项目 Agent 生成 skill 的映射
+│   │   ├── task_store.rs                # 任务存储（内存 + Session 桥接）
+│   │   ├── task_store/                  # 任务生命周期
+│   │   │   └── lifecycle.rs             # 状态机 + 历史裁剪（纯函数）
+│   │   ├── server.rs                    # 服务端：Agent Card + /rpc
+│   │   ├── server/                      # 服务端内部
+│   │   │   ├── dispatch.rs              # 方法分派
+│   │   │   ├── executor.rs              # 协议 ↔ runtime 桥
+│   │   │   └── streaming.rs             # SSE 响应
+│   │   ├── client.rs                    # 客户端：发现 / 发消息 / 查任务
+│   │   ├── client_tool.rs               # 远端 A2A agent → 本地 Tool
+│   │   ├── auth.rs                      # HTTP Bearer Token 鉴权
+│   │   └── sse.rs                       # SSE 解析（服务端/客户端共用）
+│   │
 │   ├── session.rs
 │   ├── session/                         # ── 会话 ──
 │   │   ├── model.rs                     # Session / State
@@ -3753,7 +4323,8 @@ Zephyr/
 - **配置集中**：模型名、端点、工具名一律放 `src/constant.rs`，业务代码不写魔法字符串
 - **注释与文档**：中文注释 + 模块职责说明 + ASCII 流程图
 - **注释类改动保持纯增量**：不改动既有代码逻辑
-- **分层习惯**：`src/tool` 扁平工具模块、`src/llm/*`、`src/agent/callback/*`、`src/search/*`、`src/memory/*`、`src/session/*`
+- **分层习惯**：`src/tool` 扁平工具模块、`src/llm/*`、`src/agent/callback/*`、`src/search/*`、`src/memory/*`、`src/session/*`、`src/a2a/*`、`src/app/*`
+- **大文件拆子模块**：过大的单文件按概念拆成子目录（如 `src/a2a/card/`、`src/a2a/task_store/`、`src/app/`），import 集中在文件顶部
 - **上游对齐**：与 `solenovex/rust-ai-agent` 上游保持文件树一致，上游以 `epNN` 形式打 tag
 - **里程碑 tag**：本仓库的 `ep04`~`ep15`、`interactive-terminal`、`refactor-after-ep10` 等 tag **指向本项目自己的提交**（而非上游同名 tag 的提交），由代码比对（tree 哈希 / diff 行数 / 特征文件）确定对应关系，见「技术演进流程」的阶段总览表
 - **测试**：模块内 `#[cfg(test)]` 单元测试，内存库（`:memory:`）跑存储层测试，不依赖外部服务
@@ -3770,6 +4341,7 @@ cargo run -- 你的问题               # 单次问答
 cargo run --example multi_agent -- parallel   # 多智能体演示
 cargo run --example memory_demo                # 记忆闭环演示
 cargo run --example knowledge_demo             # 文档知识库（RAG）演示
+cargo run --example a2a_demo                   # A2A 协议端到端演示
 cargo run --bin gaia               # GAIA 评测
 ```
 
@@ -3777,26 +4349,31 @@ cargo run --bin gaia               # GAIA 评测
 
 ## 已知限制与改进方向
 
-| 现状                                                          | 改进方向                           |
-| ------------------------------------------------------------- | ---------------------------------- |
-| `think()` 硬编码模型常量，未使用 `Agent.model`                | 改为使用 `self.model`              |
-| 向量检索全表扫描 + 内存算余弦                                 | 引入 HNSW / sqlite-vec 等向量索引  |
-| 知识库检索只有向量召回，没有 BM25 关键词召回                  | 引入 FTS5 做混合检索后融合排序     |
-| 知识库同 id 重复入库会覆盖文档元信息，但旧切片残留            | 入库前按 `document_id` 清旧切片    |
-| `ContextOptimizer.compaction` 中 `enable_compaction` 默认关闭 | 按场景开启                         |
-| `sliding_window` 已实现但未接入 `before_llm_call` 自动流程    | 作为兜底手段接入超阈值分支         |
-| 危险工具确认是阻塞式终端 `stdin` 读取                         | 抽象为异步确认接口，适配 GUI / Web |
-| `AgentEvent` 无持久化，`InMemorySessionManager` 进程重启即丢  | 增加 SQLite / Redis SessionManager |
-| 沙箱仅支持 Podman，Docker 需去掉 Podman 专属 flag             | 抽象容器运行时接口                 |
-| `MAX_TRANSFERS = 8` 为固定常量                                | 改为可配置项                       |
-| 沙箱 `lifetime` 到期后需重建会话，状态不跨容器                | 引入可持久化工作区卷               |
+| 现状                                                          | 改进方向                                |
+| ------------------------------------------------------------- | --------------------------------------- |
+| `think()` 硬编码模型常量，未使用 `Agent.model`                | 改为使用 `self.model`                   |
+| 向量检索全表扫描 + 内存算余弦                                 | 引入 HNSW / sqlite-vec 等向量索引       |
+| 知识库检索只有向量召回，没有 BM25 关键词召回                  | 引入 FTS5 做混合检索后融合排序          |
+| 知识库同 id 重复入库会覆盖文档元信息，但旧切片残留            | 入库前按 `document_id` 清旧切片         |
+| `ContextOptimizer.compaction` 中 `enable_compaction` 默认关闭 | 按场景开启                              |
+| `sliding_window` 已实现但未接入 `before_llm_call` 自动流程    | 作为兜底手段接入超阈值分支              |
+| 危险工具确认是阻塞式终端 `stdin` 读取                         | 抽象为异步确认接口，适配 GUI / Web      |
+| `AgentEvent` 无持久化，`InMemorySessionManager` 进程重启即丢  | 增加 SQLite / Redis SessionManager      |
+| 沙箱仅支持 Podman，Docker 需去掉 Podman 专属 flag             | 抽象容器运行时接口                      |
+| `MAX_TRANSFERS = 8` 为固定常量                                | 改为可配置项                            |
+| 沙箱 `lifetime` 到期后需重建会话，状态不跨容器                | 引入可持久化工作区卷                    |
+| A2A 任务存储默认 `InMemoryTaskStore`，进程重启即丢            | 换成 `SessionTaskStore` 或持久化后端    |
+| A2A 服务端默认绑定 `127.0.0.1`，无 TLS                        | 对外暴露时加反向代理终结 TLS            |
+| A2A 鉴权仅支持 Bearer Token 一种方案                          | 扩展 `Authenticator` 支持 OAuth2 / mTLS |
+| A2A 推送通知（`PushNotificationConfig`）未实现                | 按规范补齐 webhook 回调                 |
 
 ---
 
 ## 致谢与参考
 
 - 上游仓库：https://github.com/solenovex/rust-ai-agent
+- A2A 协议：https://a2a-protocol.org
 - LLM 网关：阿里云百炼（DashScope）OpenAI 兼容模式
-- 关键依赖：`async-openai`、`rmcp`（MCP）、`rusqlite`（bundled + vtab + functions）、`sqlite-vec`（向量索引）、`schemars`、`tiktoken-rs`、`backon`、`termimad`
+- 关键依赖：`async-openai`、`rmcp`（MCP）、`axum`（A2A 服务端）、`async-stream`（A2A SSE）、`subtle`（常量时间比较）、`rusqlite`（bundled + vtab + functions）、`sqlite-vec`（向量索引）、`schemars`、`tiktoken-rs`、`backon`、`termimad`
   - `rusqlite` 的 `vtab` feature 是 `vec0` 虚表的前提；`functions` feature 用于注册自定义分词函数
   - `sqlite-vec` 是进程级 auto extension，**必须在建立连接前注册**，否则连接看不到 `vec0` 模块
