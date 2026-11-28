@@ -6,7 +6,7 @@ AI Agent framework in Rust.
 
 - crate 名：`zephyr`（edition 2024）
 - LLM 网关：百炼 DashScope 的 OpenAI 兼容接口（`async-openai`）
-- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep15，共 17 个里程碑 tag，全部指向本项目自己的提交）
+- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep16，共 18 个里程碑 tag，全部指向本项目自己的提交）
 
 ---
 
@@ -212,8 +212,8 @@ timeline
         interactive-terminal 终端交互 : 行式 REPL + Agent 树
         ep15 文档知识库 : 切片 / 向量落库 / 混合检索
     section 协议化
-        A2A 协议 : Agent Card + JSON-RPC over HTTP
-        终端分层重构 : main.rs 只管生命周期
+        ep16 A2A 协议 : Agent Card + JSON-RPC over HTTP
+        ep16 终端分层 : main.rs 只管生命周期
 ```
 
 ### 阶段总览
@@ -237,8 +237,8 @@ timeline
 | ⑮ 运行时拆分   | `refactor-after-ep10`  | `7c27d67`  | 2026-11-20 | 15 文件  | 怎么让过大的 runtime.rs 职责单一               | `agent/runtime/` 按职责拆分                        |
 | ⑯ 本项目增强   | （持续叠加）           | 多提交     | —          | —        | 上游没有的能力怎么持续长在本项目上             | 技能加载、github_stars、上下文优化增强等           |
 | ⑰ 文档知识库   | `ep15`                 | `022c7cc`  | 2026-11-28 | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具             |
-| ⑱ A2A 协议     | （未打 tag）           | 待提交     | 2026-11-28 | 29 文件  | 怎么让 Agent 跨进程互相调用                    | `src/a2a/`、Agent Card、JSON-RPC、SSE              |
-| ⑲ 终端分层重构 | （未打 tag）           | 待提交     | 2026-11-28 | 8 文件   | 怎么让 `main.rs` 只管进程生命周期              | `src/app/`、`src/agent/tree.rs`                    |
+| ⑱ A2A 协议     | `ep16`                 | `041cf33`  | 2026-11-28 | 21 文件  | 怎么让 Agent 跨进程互相调用                    | `src/a2a/`、Agent Card、JSON-RPC、SSE              |
+| ⑲ 终端分层重构 | （同 `ep16`）          | `041cf33`  | 2026-11-28 | 9 文件   | 怎么让 `main.rs` 只管进程生命周期              | `src/app/`、`src/agent/tree.rs`                    |
 
 ---
 
@@ -1003,8 +1003,8 @@ src/agent/confirmation.rs   # 审批数据结构与两阶段恢复协议
 | `022c7cc`                         | 文档知识库（`src/knowledge/`）+ 知识库工具                      |
 | `f3b05a4`                         | README 补充 `ep15` 阶段说明                                     |
 | `6f6b670` / `1fee181`             | README 文档维护与里程碑 tag 映射表校正                          |
-| （未提交）                        | A2A 协议实现（`src/a2a/`）+ 四个 A2A 示例                       |
-| （未提交）                        | 终端分层重构（`src/app/`）+ Agent 树抽离（`src/agent/tree.rs`） |
+| `041cf33`                         | A2A 协议实现（`src/a2a/`）+ 四个 A2A 示例                       |
+| `041cf33`                         | 终端分层重构（`src/app/`）+ Agent 树抽离（`src/agent/tree.rs`） |
 
 同时新增了几个本项目独有的模块：
 
@@ -1051,7 +1051,7 @@ pub struct SkillInfo {
 
 ---
 
-### 阶段 ⑱ A2A 协议：Agent 之间的跨进程调用
+### 阶段 ⑱ A2A 协议：Agent 之间的跨进程调用（ep16）
 
 **问题**：多智能体编排（ep14）解决的是**同一个进程内**的 agent 委派——`transfer_to_agent` 直接调另一个 `Agent` 的方法，对方是"函数"而不是"同事"。但现实中经常需要把一个 agent 暴露给**别的系统**（另一个团队写的服务、一套不同的技术栈），这时共享内存行不通，必须有一层跨进程的协议。MCP 在这里帮不上忙：MCP 暴露的是**工具**（被动函数），而对端是一个**自主体**——它有自己的模型、自己的工具、自己的多步规划，甚至会反过来找你确认信息。
 
@@ -1081,7 +1081,7 @@ pub struct SkillInfo {
 
 ---
 
-### 阶段 ⑲ 终端分层重构：`main.rs` 只管生命周期
+### 阶段 ⑲ 终端分层重构：`main.rs` 只管生命周期（ep16）
 
 **问题**：`src/main.rs` 在 A2A 接入后膨胀到 758 行，混杂了工具箱装配、agent 树构造、MCP/记忆库/知识库初始化、A2A 服务端启动、斜杠命令分发、终端渲染、帮助文本——七种关注点挤在一个文件里。每次加能力都要在同一个文件里找位置。
 
@@ -4326,7 +4326,7 @@ Zephyr/
 - **分层习惯**：`src/tool` 扁平工具模块、`src/llm/*`、`src/agent/callback/*`、`src/search/*`、`src/memory/*`、`src/session/*`、`src/a2a/*`、`src/app/*`
 - **大文件拆子模块**：过大的单文件按概念拆成子目录（如 `src/a2a/card/`、`src/a2a/task_store/`、`src/app/`），import 集中在文件顶部
 - **上游对齐**：与 `solenovex/rust-ai-agent` 上游保持文件树一致，上游以 `epNN` 形式打 tag
-- **里程碑 tag**：本仓库的 `ep04`~`ep15`、`interactive-terminal`、`refactor-after-ep10` 等 tag **指向本项目自己的提交**（而非上游同名 tag 的提交），由代码比对（tree 哈希 / diff 行数 / 特征文件）确定对应关系，见「技术演进流程」的阶段总览表
+- **里程碑 tag**：本仓库的 `ep04`~`ep16`、`interactive-terminal`、`refactor-after-ep10` 等 tag **指向本项目自己的提交**（而非上游同名 tag 的提交），由代码比对（tree 哈希 / diff 行数 / 特征文件）确定对应关系，见「技术演进流程」的阶段总览表
 - **测试**：模块内 `#[cfg(test)]` 单元测试，内存库（`:memory:`）跑存储层测试，不依赖外部服务
 
 ### 常用命令
