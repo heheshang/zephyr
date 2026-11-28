@@ -6,8 +6,7 @@ AI Agent framework in Rust.
 
 - crate 名：`zephyr`（edition 2024）
 - LLM 网关：百炼 DashScope 的 OpenAI 兼容接口（`async-openai`）
-- 教程配套仓库：Bilibili 系列 **《用Rust构建AI Agent》**（https://space.bilibili.com/361469957）
-- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep14，共 17 个里程碑 tag + 21 个本地提交）
+- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep15，共 18 个里程碑 tag + 21 个本地提交）
 
 ---
 
@@ -186,6 +185,7 @@ timeline
         ep13 代码沙箱 : podman 隔离执行
         ep14 多智能体 : transfer / workflow / Agent-as-Tool
         interactive-terminal 终端交互 : 行式 REPL + Agent 树
+        ep15 文档知识库 : 切片 / 向量落库 / 混合检索
 ```
 
 ### 阶段总览
@@ -207,6 +207,7 @@ timeline
 | ⑬ 多智能体     | `ep14`                 | 2026-11-12    | 10 文件  | 怎么把单一 Agent 拆成有分工的团队              | `multi_agent/`、`TransferTool`、`AgentTool`        |
 | ⑭ 终端交互     | `interactive-terminal` | 2026-11-12    | 7 文件   | 怎么让框架成为可日常使用的终端产品             | 行式 REPL、Agent 树装配                            |
 | ⑮ 本地增强     | 21 个提交              | 2026-11-12 起 | 54 文件  | 怎么把上游代码变成自己的项目                   | `zephyr` 重命名、`skill.rs`、新工具                |
+| ⑯ 文档知识库   | `ep15`                 | 2026-11-28    | 20 文件  | 怎么让外部文档变成可检索的向量知识库           | `src/knowledge/`、混合检索、知识库工具            |
 
 ---
 
@@ -940,7 +941,7 @@ if !sandbox_prompt.is_empty() {
 
 ### 阶段 ⑮ 本地增强（21 个提交）
 
-上游 ep14 之后，本地继续推进了 21 个提交，把项目从"跟随教程"变成"自己的项目"：
+上游 ep14 之后，本地继续推进了 21 个提交，把项目从"跟随式改造"变成"自己的项目"：
 
 | 提交                              | 内容                                                          |
 | --------------------------------- | ------------------------------------------------------------- |
@@ -974,9 +975,34 @@ pub struct SkillInfo {
 
 ---
 
+### 阶段 ⑯ 文档知识库（ep15）
+
+**问题**：`src/search/` 只提供了切片、embedding、余弦相似度这些**检索原语**，每次检索都要把候选重新算一遍向量，没有落库；而且只有向量召回，遇到专有名词、型号、缩写时经常召回不到。项目里一直缺一个能把外部资料（技术文档、笔记、网页）真正沉淀下来的知识库。
+
+**实现细节**：新增 `src/knowledge/` 模块，补齐「文档 → 切片 → embedding → 落库 → 混合检索 → 拼进 prompt」完整链路：
+
+| 文件                | 职责                                                                       |
+| ------------------- | -------------------------------------------------------------------------- |
+| `src/knowledge/model.rs`         | 领域模型：`Document`、`Chunk`、`SearchHit`            |
+| `src/knowledge/store.rs`         | SQLite 存储层：文档表、切片表、FTS5 虚表            |
+| `src/knowledge/index.rs`         | `sqlite-vec` 的 `vec0` 向量索引（**建连接前必须注册扩展**） |
+| `src/knowledge/tokenizer.rs`     | 中英混合分词（中文 bigram + 英文词干）               |
+| `src/knowledge/embedder.rs`      | `Embedder` trait 抽象（可注入假实现便于测试）           |
+| `src/knowledge/hybrid.rs`        | 混合检索：向量 + BM25(FTS5) → RRF 融合排序            |
+| `src/knowledge/knowledge_base.rs`| 入库 / 混合检索 / 删除 / 列表的编排层                |
+
+两个关键设计：
+
+1. **向量与关键词双路召回**。纯向量检索对"Rust 的 `Rc` 和 `Arc` 区别"这类精确词匹配很弱，于是用 SQLite FTS5 建关键词虚表，与 `vec0` 向量表各自召回，再用 **RRF（Reciprocal Rank Fusion）** 融合两路排名——不需要训练、不需要调权重，效果稳定。
+2. **Agent 可主动调用知识库**。新增 `src/tool/knowledge_tool.rs`，提供 `search_knowledge`（语义检索，返回带来源的原文片段）与 `add_knowledge`（文档入库：切片 + 向量 + 落库）两个工具，让模型自己决定何时检索、何时写入，而不是靠框架硬塞上下文。
+
+**沉淀**：一个既能被人主动查询、也能被 Agent 自主检索的文档知识库。
+
+---
+
 ### 演进规律总结
 
-把 15 个阶段串起来看，有五条贯穿始终的技术规律：
+把 16 个阶段串起来看，有五条贯穿始终的技术规律：
 
 **规律一：先立契约，再填实现。** 每个阶段都先定义 trait（`Tool`、`SessionManager`、`CodeExecutor`、`AgentNode`、`SandboxTool`），实现可以后补、可以替换。这让 `ToolBox` 里既有本地工具、又有 MCP 工具、又有 Agent-as-Tool，对 Agent 而言毫无区别。
 
@@ -3747,7 +3773,6 @@ cargo run --bin gaia               # GAIA 评测
 
 ## 致谢与参考
 
-- 教程系列：**《用Rust构建AI Agent》** — https://space.bilibili.com/361469957
 - 上游仓库：https://github.com/solenovex/rust-ai-agent
 - LLM 网关：阿里云百炼（DashScope）OpenAI 兼容模式
 - 关键依赖：`async-openai`、`rmcp`（MCP）、`rusqlite`（bundled + vtab + functions）、`sqlite-vec`（向量索引）、`schemars`、`tiktoken-rs`、`backon`、`termimad`
