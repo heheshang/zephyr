@@ -24,6 +24,7 @@ pub mod failing_tools;
 pub mod file;
 pub mod final_answer;
 pub mod github_stars;
+pub mod knowledge_tool;
 pub mod mcp;
 pub mod memory_tool;
 pub mod planning;

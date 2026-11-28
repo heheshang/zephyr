@@ -28,14 +28,17 @@ use zephyr::{
         tool_confirmation::ToolConfirmation,
     },
     constant::{GPT_6_LUNA_PRO_MODEL, TEXT_EMBEDDING_3_SMALL_MODEL},
+    knowledge::knowledge_base::KnowledgeBaseManager,
     memory::memory_manager::TaskMemoryManager,
     tool::{
         GithubStarsTool, ToolBox, build_basic_toolbox, build_toolbox, code::register_code_tools,
-        file::list::ListFileTool, file::read::ReadFileTool, memory_tool::RecallMemoryTool,
+        file::list::ListFileTool, file::read::ReadFileTool, knowledge_tool::{AddKnowledgeTool, SearchKnowledgeTool},
+        memory_tool::RecallMemoryTool,
     },
 };
 
 const MEMORY_DB: &str = ".zephyr/memory.db";
+const KNOWLEDGE_DB: &str = ".zephyr/knowledge.db";
 const HISTORY_LIMIT: usize = 20;
 
 const HELP: &str = "\
@@ -48,6 +51,7 @@ const HELP: &str = "\
 - `/tools` 查看每个 agent 的工具
 - `/history [n]` 查看最近 n 条事件，默认 20
 - `/remember` 把当前会话提取为长期记忆
+- `/knowledge` 列出知识库中的文档
 - `/clear` 清屏并重画横幅
 - `/quit` 退出
 
@@ -59,6 +63,7 @@ const HELP: &str = "\
 - `transfer_to_agent`：把控制权交给 researcher / math / coder
 - 工具审批：危险工具执行前会暂停并询问
 - 长期记忆：`/remember` 保存，之后自动检索
+- 文档知识库：`add_knowledge` 入库，`search_knowledge` 检索
 - Markdown：回答按终端 Markdown 渲染
 ";
 
@@ -102,6 +107,7 @@ struct Features {
     mcp: bool,
     code: bool,
     memory: bool,
+    knowledge: bool,
     skills: bool,
 }
 
@@ -136,6 +142,7 @@ struct App {
     agents: HashMap<String, Arc<Agent>>,
     context: ExecutionContext,
     memory: Option<Arc<TaskMemoryManager>>,
+    knowledge: Option<Arc<KnowledgeBaseManager>>,
     features: Features,
 }
 
@@ -212,6 +219,15 @@ async fn build_app() -> anyhow::Result<App> {
         }
     };
 
+    // 知识库是可选能力：初始化失败时只打印 warning，不影响对话。
+    let knowledge = match init_knowledge() {
+        Ok(manager) => Some(Arc::new(manager)),
+        Err(err) => {
+            eprintln!("warning: knowledge base disabled: {err}");
+            None
+        }
+    };
+
     let mut math_tools = ToolBox::new();
     if let Some(calculator) = available_tools.remove("calculator") {
         math_tools.insert("calculator".to_owned(), calculator);
@@ -244,6 +260,17 @@ async fn build_app() -> anyhow::Result<App> {
         &mut coder_tools,
     ] {
         add_memory_tool(toolbox, &memory);
+    }
+
+    // 知识库检索给到根助手和 researcher（负责查资料的专家）；
+    // 入库工具只给根助手，由它统一管理资料，避免各 Agent 重复写入。
+    add_knowledge_tools(&mut available_tools, &knowledge);
+    add_knowledge_tools(&mut researcher_tools, &knowledge);
+    if let Some(manager) = &knowledge {
+        available_tools.insert(
+            "add_knowledge".to_owned(),
+            Box::new(AddKnowledgeTool::new(manager.clone())),
+        );
     }
 
     let callbacks = Callbacks::new(memory.clone());
@@ -301,6 +328,7 @@ async fn build_app() -> anyhow::Result<App> {
         .get_or_create(&session_id, None)
         .await?;
     let memory_enabled = memory.is_some();
+    let knowledge_enabled = knowledge.is_some();
 
     Ok(App {
         model,
@@ -309,10 +337,12 @@ async fn build_app() -> anyhow::Result<App> {
         agents,
         context: ExecutionContext::new(session),
         memory,
+        knowledge,
         features: Features {
             mcp,
             code,
             memory: memory_enabled,
+            knowledge: knowledge_enabled,
             skills,
         },
     })
@@ -323,11 +353,29 @@ fn init_memory(chat_model: &str) -> anyhow::Result<TaskMemoryManager> {
     TaskMemoryManager::new(MEMORY_DB, chat_model, TEXT_EMBEDDING_3_SMALL_MODEL)
 }
 
+/// 打开文档知识库。
+///
+/// 与记忆库共用 `.zephyr/` 目录，但用不同的 db 文件，互不干扰。
+fn init_knowledge() -> anyhow::Result<KnowledgeBaseManager> {
+    std::fs::create_dir_all(".zephyr")?;
+    KnowledgeBaseManager::new(KNOWLEDGE_DB, TEXT_EMBEDDING_3_SMALL_MODEL)
+}
+
 fn add_memory_tool(toolbox: &mut ToolBox, memory: &Option<Arc<TaskMemoryManager>>) {
     if let Some(manager) = memory {
         toolbox.insert(
             "recall_memory".to_owned(),
             Box::new(RecallMemoryTool::new(manager.clone())),
+        );
+    }
+}
+
+/// 给 toolbox 挂上知识库检索工具。知识库不可用时静默跳过。
+fn add_knowledge_tools(toolbox: &mut ToolBox, knowledge: &Option<Arc<KnowledgeBaseManager>>) {
+    if let Some(manager) = knowledge {
+        toolbox.insert(
+            "search_knowledge".to_owned(),
+            Box::new(SearchKnowledgeTool::new(manager.clone())),
         );
     }
 }
@@ -502,6 +550,7 @@ async fn handle_command(app: &mut App, input: &str) -> anyhow::Result<bool> {
             print_history(&app.context, limit);
         }
         "/remember" | "/save" => remember(app).await?,
+        "/knowledge" => print_knowledge(app)?,
         "/clear" => {
             print!("\x1b[2J\x1b[H");
             io::stdout().flush()?;
@@ -525,6 +574,43 @@ async fn remember(app: &mut App) -> anyhow::Result<()> {
         Ok(None) => println!("nothing saved (duplicate, empty, or extraction failed)"),
         Err(err) => println!("memory save failed: {err:#}"),
     }
+    Ok(())
+}
+
+/// 列出知识库里的文档。
+///
+/// 知识库可以被 Agent 通过 `add_knowledge` 写入，运维视角需要能确认
+/// "库里现在到底有哪些资料"。
+fn print_knowledge(app: &App) -> anyhow::Result<()> {
+    let Some(knowledge) = &app.knowledge else {
+        println!("knowledge base is disabled");
+        return Ok(());
+    };
+
+    let documents = knowledge.list_documents()?;
+    let total_chunks = knowledge.total_chunks()?;
+
+    if documents.is_empty() {
+        println!("knowledge base is empty ({total_chunks} chunks)");
+        return Ok(());
+    }
+
+    println!("knowledge base: {} documents, {total_chunks} chunks", documents.len());
+    for doc in documents {
+        let source = if doc.source.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", doc.source)
+        };
+        println!(
+            "  [{}] {}{} ({} chars)",
+            &doc.id[..doc.id.len().min(8)],
+            doc.title,
+            source,
+            doc.content.chars().count()
+        );
+    }
+
     Ok(())
 }
 
@@ -584,6 +670,7 @@ fn render_markdown(text: &str) {
 
 fn print_banner(app: &App) {
     let memory = if app.features.memory { "on" } else { "off" };
+    let knowledge = if app.features.knowledge { "on" } else { "off" };
     let code = if app.features.code { "on" } else { "off" };
     let mcp = if app.features.mcp { "on" } else { "off" };
     let skills = if app.features.skills { "on" } else { "off" };
@@ -592,11 +679,13 @@ fn print_banner(app: &App) {
     println!("{}  terminal assistant", styled("zephyr", "1;36"));
     println!("model   : {}", app.model);
     println!("session : {}", app.session_id);
-    println!("features: mcp={mcp}  code={code}  memory={memory}  skills={skills}  transfer=on");
+    println!(
+        "features: mcp={mcp}  code={code}  memory={memory}  knowledge={knowledge}  skills={skills}  transfer=on"
+    );
     let mut agent_names = app.agents.keys().cloned().collect::<Vec<_>>();
     agent_names.sort();
     println!("agents  : {}", agent_names.join(", "));
-    println!("commands: /help  /new  /status  /agents  /tools  /history  /remember  /quit");
+    println!("commands: /help  /new  /status  /agents  /tools  /history  /remember  /knowledge  /quit");
     println!();
 }
 
@@ -607,7 +696,7 @@ fn status_text(app: &App) -> String {
         app.context.transfer_history.join(", ")
     };
     format!(
-        "model: {}\nsession: {}\nevents: {}\nlast step: {}\ntransfers: {}\nfeatures: mcp={} code={} memory={} skills={}",
+        "model: {}\nsession: {}\nevents: {}\nlast step: {}\ntransfers: {}\nfeatures: mcp={} code={} memory={} knowledge={} skills={}",
         app.model,
         app.session_id,
         app.context.session.events.len(),
@@ -616,6 +705,7 @@ fn status_text(app: &App) -> String {
         app.features.mcp,
         app.features.code,
         app.features.memory,
+        app.features.knowledge,
         app.features.skills,
     )
 }

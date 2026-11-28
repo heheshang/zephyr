@@ -2,11 +2,12 @@
 
 AI Agent framework in Rust.
 
-基于 Rust 从零实现的 AI Agent 框架：自带 ReAct 式运行时、工具系统、会话管理、长期记忆（RAG）、上下文优化器、MCP 客户端，并附带 GAIA 基准评测入口。
+基于 Rust 从零实现的 AI Agent 框架：自带 ReAct 式运行时、工具系统、会话管理、长期记忆（RAG）、上下文优化器、MCP 客户端、代码沙箱、技能（Skill）加载与多智能体编排，并附带 GAIA 基准评测入口。
 
 - crate 名：`zephyr`（edition 2024）
 - LLM 网关：百炼 DashScope 的 OpenAI 兼容接口（`async-openai`）
 - 教程配套仓库：Bilibili 系列 **《用Rust构建AI Agent》**（https://space.bilibili.com/361469957）
+- 技术演进路线：[技术演进流程](#技术演进流程)（ep04 → ep14，共 17 个里程碑 tag + 21 个本地提交）
 
 ---
 
@@ -14,6 +15,7 @@ AI Agent framework in Rust.
 
 - [核心特性](#核心特性)
 - [快速开始](#快速开始)
+- [技术演进流程](#技术演进流程)
 - [代码阅读路线](#代码阅读路线)
 - [图解总览](#图解总览)
 - [项目全景脑图](#项目全景脑图)
@@ -23,6 +25,7 @@ AI Agent framework in Rust.
 - [回调机制（Callback）](#回调机制callback)
 - [工具系统](#工具系统)
 - [长期记忆系统](#长期记忆系统)
+- [文档知识库（RAG）](#文档知识库rag)
 - [上下文优化器](#上下文优化器)
 - [会话与事件模型](#会话与事件模型)
 - [GAIA 基准评测](#gaia-基准评测)
@@ -35,19 +38,25 @@ AI Agent framework in Rust.
 
 ## 核心特性
 
-| 能力         | 说明                                                   | 主要代码位置                                                |
-| ------------ | ------------------------------------------------------ | ----------------------------------------------------------- |
-| ReAct 运行时 | `think → act → observe` 循环，最多 `max_steps` 步      | `src/agent/runtime/`                                        |
-| 工具系统     | 统一 `Tool` trait，schema 由 `schemars` 自动生成       | `src/tool.rs`、`src/tool/`                                  |
-| 工具人工确认 | 危险工具挂起为 `PendingToolCall`，等待外部批准后恢复   | `src/agent/tool_confirmation.rs`                            |
-| 会话管理     | `SessionManager` 抽象，默认内存实现，可插拔持久化      | `src/session/`                                              |
-| 事件溯源     | 所有消息 / 工具调用 / 工具结果统一记录为 `AgentEvent`  | `src/agent/event.rs`                                        |
-| 长期记忆     | SQLite 存储 + embedding 向量检索 + LLM 查重 + 自动注入 | `src/memory/`                                               |
-| 上下文优化   | token 计数、结果压缩、滑动窗口、增量摘要               | `src/agent/callback/before_llm_callback/context_optimizer/` |
-| 结构化输出   | `ask::<T>()` 强制 JSON Schema 严格模式 + 指数退避重试  | `src/llm/ask.rs`                                            |
-| MCP 客户端   | 通过子进程 stdio 接入外部 MCP Server，动态注册工具     | `src/tool/mcp/`                                             |
-| 规划工具     | `create_tasks` 任务清单，供复杂多步任务使用            | `src/tool/planning.rs`、`src/planning/`                     |
-| 基准评测     | GAIA 数据集加载、附件下载、有/无工具对照评测           | `src/gaia/`                                                 |
+| 能力         | 说明                                                       | 主要代码位置                                                         |
+| ------------ | ---------------------------------------------------------- | -------------------------------------------------------------------- |
+| ReAct 运行时 | `think → act → observe` 循环，最多 `max_steps` 步          | `src/agent/runtime/`                                                 |
+| 工具系统     | 统一 `Tool` trait，schema 由 `schemars` 自动生成           | `src/tool.rs`、`src/tool/`                                           |
+| 工具人工确认 | 危险工具挂起为 `PendingToolCall`，等待外部批准后恢复       | `src/agent/tool_confirmation.rs`                                     |
+| 会话管理     | `SessionManager` 抽象，默认内存实现，可插拔持久化          | `src/session/`                                                       |
+| 事件溯源     | 所有消息 / 工具调用 / 工具结果统一记录为 `AgentEvent`      | `src/agent/event.rs`                                                 |
+| 长期记忆     | SQLite 存储 + embedding 向量检索 + LLM 查重 + 自动注入     | `src/memory/`                                                        |
+| 文档知识库   | 文档 → 切片 → embedding → SQLite 落库 → **混合检索（向量 + BM25 + RRF）** | `src/knowledge/`                                                     |
+| 知识库工具   | `search_knowledge` / `add_knowledge`，Agent 主动检索与入库 | `src/tool/knowledge_tool.rs`                                         |
+| 上下文优化   | token 计数、结果压缩、滑动窗口、增量摘要                   | `src/agent/callback/before_llm_callback/context_optimizer/`          |
+| 结构化输出   | `ask::<T>()` 强制 JSON Schema 严格模式 + 指数退避重试      | `src/llm/ask.rs`                                                     |
+| MCP 客户端   | 通过子进程 stdio 接入外部 MCP Server，动态注册工具         | `src/tool/mcp/`                                                      |
+| 规划工具     | `create_tasks` 任务清单，供复杂多步任务使用                | `src/tool/planning.rs`、`src/planning/`                              |
+| 反思工具     | `reflection` 显式暴露"是否需要重新规划"的决策点            | `src/tool/reflection.rs`                                             |
+| 代码沙箱     | Podman 容器内跑 Python / Bash，宿主工具经 bridge 回调      | `src/sandbox/`、`src/tool/code/`                                     |
+| 技能加载     | 扫描 `SKILL.md`，只把 name/description 注入提示词          | `src/skill.rs`                                                       |
+| 多智能体     | Agent 树 + `transfer_to_agent` 交接 + Agent-as-Tool        | `src/multi_agent/`、`src/tool/transfer.rs`、`src/tool/agent_tool.rs` |
+| 基准评测     | GAIA 数据集加载、附件下载、有/无工具对照评测               | `src/gaia/`                                                          |
 
 ---
 
@@ -69,12 +78,16 @@ cargo build --release
 cp .env.example .env
 ```
 
-| 变量              | 用途              | 说明                                                                                                                                      |
-| ----------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENAI_BASE_URL` | 网关地址          | 仓库 `.env.example` 默认 `https://openrouter.ai/api/v1`；实际使用百炼时改为 `https://cn-beijing.maas.qianwenaiapi.com/compatible-mode/v1` |
-| `OPENAI_API_KEY`  | 网关密钥          | 必填                                                                                                                                      |
-| `HF_TOKEN`        | HuggingFace Token | GAIA 数据集与附件下载用                                                                                                                   |
-| `TAVILY_API_KEY`  | Tavily 搜索 Key   | `web_search` 工具用                                                                                                                       |
+| 变量                | 用途              | 说明                                                                                                                                      |
+| ------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENAI_BASE_URL`   | 网关地址          | 仓库 `.env.example` 默认 `https://openrouter.ai/api/v1`；实际使用百炼时改为 `https://cn-beijing.maas.qianwenaiapi.com/compatible-mode/v1` |
+| `OPENAI_API_KEY`    | 网关密钥          | 必填                                                                                                                                      |
+| `HF_TOKEN`          | HuggingFace Token | GAIA 数据集与附件下载用                                                                                                                   |
+| `TAVILY_API_KEY`    | Tavily 搜索 Key   | `web_search` 工具用                                                                                                                       |
+| `CODE_EXECUTION`    | 代码执行开关      | `off`（默认）/ `podman`；设为 `podman` 时启用沙箱内的 Python / Bash                                                                       |
+| `SANDBOX_WORKSPACE` | 沙箱工作区        | 宿主目录挂载为容器内 `/workspace`，默认 `./workspace`                                                                                     |
+| `UPLOAD_ROOT`       | 上传白名单根目录  | 仅该目录下的文件可被 `upload_file` 上传；不设则不注册上传工具                                                                             |
+| `SKILLS_DIR`        | 技能目录          | 宿主目录只读挂载为 `/skills`，扫描其中的 `SKILL.md`                                                                                       |
 
 > 注意：该网关只接受**不带厂商前缀**的模型名（例如 `qwen-plus`），`provider/model` 形式会返回 `Model not exist`。
 > 代码在启动时通过 `dotenv::dotenv()` 加载 `.env`；`src/search/embedding.rs` 与 `vector_search.rs` 内部也会自行加载。
@@ -82,8 +95,28 @@ cp .env.example .env
 ### 3. 运行
 
 ```bash
-# 主演示：记忆存取 + 跨会话回忆（src/main.rs）
+# 交互式终端 Agent（src/main.rs，行式 REPL，不进入 alternate screen）
 cargo run
+cargo run -- 你的问题          # 单次问答
+
+# 多智能体演示（examples/multi_agent.rs）
+cargo run --example multi_agent -- transfer
+cargo run --example multi_agent -- sequential
+cargo run --example multi_agent -- parallel
+cargo run --example multi_agent -- loop
+cargo run --example multi_agent -- agent-tool
+
+# 记忆闭环演示（examples/memory_demo.rs）
+cargo run --example memory_demo
+
+# 文档知识库（RAG）演示（examples/knowledge_demo.rs）
+cargo run --example knowledge_demo
+
+# 混合检索对比演示（examples/hybrid_search_demo.rs）
+cargo run --example hybrid_search_demo
+
+# 知识库工具端到端演示（examples/knowledge_tool_demo.rs）
+cargo run --example knowledge_tool_demo
 
 # GAIA 基准评测（src/bin/gaia.rs）
 cargo run --bin gaia
@@ -92,16 +125,883 @@ cargo run --bin gaia
 cargo run --bin wikipedia_mcp_server
 ```
 
-### 4. 主程序演示了什么
+### 4. 交互式主程序演示了什么
 
-`src/main.rs` 演示了一条完整的"记忆闭环"：
+`src/main.rs` 是一个行式 REPL：保留终端滚动与复制粘贴，助手回答用 Markdown 渲染（`termimad`）。它装配了一棵 Agent 树：
 
 ```
-STEP 1  会话 A 做题          → agent.run("圆的直径 10cm，面积?")
-STEP 2  追加家长反馈并保存记忆 → memory_manager.save(events)
-STEP 3  直接向量检索验证       → memory_manager.search("半径 3cm 的圆面积")
-STEP 4  会话 B 问同类问题      → 自动注入历史经验，参考成功方法
+assistant（根，24 步）
+├── researcher  联网检索 + github_stars（12 步）
+├── math        calculator（6 步）
+└── coder       execute_python / bash_tool / upload_file / 文件工具（12 步）
 ```
+
+- 根 Agent 通过 `transfer_to_agent` 把控制权交给专家，专家在**同一会话**里继续，因此能看到交接过程；
+- 危险工具执行前挂起为 `PendingToolCall`，终端询问 `y/n` 后恢复执行；
+- `/remember` 把当前会话沉淀为长期记忆，之后自动检索注入；
+- `/knowledge` 列出知识库里的文档（Agent 也可用 `add_knowledge` 入库、`search_knowledge` 检索）；
+- `/agents`、`/tools`、`/history` 可查看 Agent 树、工具清单与事件流。
+
+```
+/help        显示帮助
+/new         开始新会话
+/status      查看模型、会话与功能状态
+/agents      查看 agent 树和转移目标
+/tools       查看每个 agent 的工具
+/history [n] 查看最近 n 条事件
+/remember    把当前会话提取为长期记忆
+/knowledge   列出知识库中的文档
+/clear       清屏
+/quit        退出
+```
+
+> MCP、沙箱、长期记忆、文档知识库都是**可选能力**：启动失败时程序会打印 warning 并回退到基础工具集，不影响对话。
+
+---
+
+## 技术演进流程
+
+本节按 git tag 记录的真实提交顺序，梳理 Zephyr 从"能调用 LLM"到"可运营的多智能体终端"的全过程。每个阶段都说明三件事：**当时要解决什么问题**、**代码上怎么落地**、**留下了什么可复用的结构**。
+
+### 演进主线
+
+```mermaid
+timeline
+    title Zephyr 技术演进（2026-07 → 2026-11）
+    section 接入层
+        ep04 LLM 接入 : stream / complete / 结构化输出
+        ep05 工具抽象 : Tool trait + calculator
+    section 外部能力
+        ep06 MCP 协议 : rmcp 子进程 stdio
+        ep08 回调扩展 : before/after tool 钩子
+    section 运行时
+        ep07 Agent 循环 : think-act-observe
+        ep09 上下文优化 : compaction / 摘要 / 滑窗
+        ep10 会话与审批 : SessionManager + 确认协议
+    section 记忆
+        ep11 长期记忆 : SQLite + embedding + 查重
+        ep11-refactored 分层重构 : 117 文件重排
+    section 智能与执行
+        ep12 规划与反思 : create_tasks / reflection
+        ep13 代码沙箱 : podman 隔离执行
+        ep14 多智能体 : transfer / workflow / Agent-as-Tool
+        interactive-terminal 终端交互 : 行式 REPL + Agent 树
+```
+
+### 阶段总览
+
+| 阶段           | tag / 提交             | 日期          | 规模     | 解决的问题                                     | 沉淀的核心结构                                     |
+| -------------- | ---------------------- | ------------- | -------- | ---------------------------------------------- | -------------------------------------------------- |
+| ① LLM 接入     | `ep04`                 | 2026-07-13    | 2 文件   | 怎么稳定地跟 LLM 对话、拿到可解析的结构化结果  | `llm/{stream,complete,structured}.rs`、`semaphore` |
+| ② 工具抽象     | `ep05`                 | 2026-07-22    | 12 文件  | 怎么让模型"调用能力"，而不是只会说话           | `Tool` trait、`ToolBox`                            |
+| ③ MCP 接入     | `ep06`                 | 2026-07-27    | 9 文件   | 怎么复用外部已有工具服务，而不是重复造轮子     | `McpClient`（rmcp 子进程 stdio）                   |
+| ④ Agent 运行时 | `ep07`                 | 2026-07-29    | 13 文件  | 怎么把"想→做→看结果"变成可循环的运行时         | `Agent`、`ExecutionContext`、`Event`/`ContentItem` |
+| ⑤ GAIA 评测    | `ep07-gaia`            | 2026-07-30    | 8 文件   | 怎么量化 Agent 到底比裸 LLM 强多少             | 有/无工具对照评测流程                              |
+| ⑥ 回调机制     | `ep08`                 | 2026-08-09    | 11 文件  | 怎么在不改动运行时核心的前提下插入横切逻辑     | 三类 callback trait                                |
+| ⑦ 上下文优化   | `ep09`                 | 2026-09-08    | 6 文件   | 怎么让长会话不撑爆上下文                       | `LlmRequest` + `ContextOptimizer`                  |
+| ⑧ 会话与审批   | `ep10`                 | 2026-09-13    | 19 文件  | 怎么跨多轮保留状态，怎么在危险操作前停下来问人 | `SessionManager`、`confirmation.rs`                |
+| ⑨ 长期记忆     | `ep11`                 | 2026-09-17    | 19 文件  | 怎么让经验跨会话沉淀并复用                     | `TaskMemoryManager` + SQLite                       |
+| ⑩ 分层重构     | `ep11-refactored`      | 2026-10-04    | 117 文件 | 怎么让前 9 个阶段的代码摆放得可读              | 目录即职责的模块布局                               |
+| ⑪ 规划与反思   | `ep12`                 | 2026-11-02    | 5 文件   | 怎么让模型显式管理待办、显式承认走错路         | `create_tasks`、`reflection`                       |
+| ⑫ 代码沙箱     | `ep13`                 | 2026-11-05    | 24 文件  | 怎么让模型安全地执行真实代码                   | `sandbox/`（podman + bridge）                      |
+| ⑬ 多智能体     | `ep14`                 | 2026-11-12    | 10 文件  | 怎么把单一 Agent 拆成有分工的团队              | `multi_agent/`、`TransferTool`、`AgentTool`        |
+| ⑭ 终端交互     | `interactive-terminal` | 2026-11-12    | 7 文件   | 怎么让框架成为可日常使用的终端产品             | 行式 REPL、Agent 树装配                            |
+| ⑮ 本地增强     | 21 个提交              | 2026-11-12 起 | 54 文件  | 怎么把上游代码变成自己的项目                   | `zephyr` 重命名、`skill.rs`、新工具                |
+
+---
+
+### 阶段 ① LLM 接入层（ep04）
+
+**问题**：一切从"能不能稳定地跟模型说话并拿到 JSON"开始。这个阶段还没有 Agent，只有一个 LLM 工具箱。
+
+**实现细节**：
+
+`src/llm/` 下分出四条并行的调用路径，各自有明确的适用场景：
+
+```mermaid
+flowchart LR
+    A["llm/"] --> B["stream.rs<br/>SSE 增量输出"]
+    A --> C["complete.rs<br/>一次性补全"]
+    A --> D["structured.rs<br/>JSON Schema 严格模式"]
+    A --> E["semaphore.rs<br/>全局并发上限"]
+```
+
+结构化输出是这个阶段最关键的技术决策。用 `schemars` 从 Rust 类型反推 JSON Schema，再以 `strict: true` 交给网关：
+
+```rust
+let schema = schemars::schema_for!(ActionPlan);
+let format_setting = ResponseFormat::JsonSchema {
+    json_schema: ResponseFormatJsonSchema {
+        name: "action_plan".into(),
+        schema: schema.as_value().clone(),
+        strict: Some(true),
+        ..Default::default()
+    },
+};
+```
+
+`strict: true` 意味着模型**不能**返回 schema 之外的字段，`serde_json::from_str` 的解析失败率因此从"经常失败"降到"极少失败"。这一条后来被完整继承到 `src/llm/ask.rs`，成为整个记忆模块与评测模块的解析基础。
+
+流式实现用 `async_stream::stream!` 把 `create_stream` 的 chunk 逐个 yield，并借助 `backon` 的指数退避处理重试：
+
+```rust
+let mut stream = client.chat().create_stream(request).await?;
+while let Some(response_result) = stream.next().await {
+    match response_result {
+        Ok(chunk) => {
+            if let Some(choice) = chunk.choices.first()
+                && let Some(new_text) = &choice.delta.content {
+                    yield Ok(new_text.clone())
+            }
+        }
+        Err(err) => yield Err(err.into()),
+    }
+}
+```
+
+**沉淀**：`llm/semaphore.rs` 里的全局 `Semaphore` 在这一阶段就存在，最初用于 GAIA 批量调用限流；后来成为所有并发 LLM 调用的统一入口。
+
+**同时发生的事**：GAIA 评测的骨架也在这个阶段搭起来了（`gaia/{dataset,evaluator,models,solver}.rs`），但当时只能做"裸 LLM 单次调用"，还没有工具。
+
+---
+
+### 阶段 ② 工具抽象（ep05）
+
+**问题**：要让模型调用能力，必须给每个能力定义**统一契约**：名字、描述、参数 schema、执行方式。
+
+**实现细节**：`src/tools/tool.rs` 定义了此后一直没变的 trait 骨架：
+
+```rust
+#[async_trait::async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters(&self) -> Value;
+    async fn execute(&self, args_json: &str) -> anyhow::Result<String>;
+    fn definition(&self) -> anyhow::Result<ChatCompletionTools> { /* 默认实现 */ }
+}
+```
+
+关键设计是 `definition()` 作为**默认方法**：子类只管实现 `name` / `description` / `parameters` / `execute` 四件事，OpenAI 的 `tools` 数组元素由基类统一打包，不会出现各家工具的 schema 格式不一致。
+
+参数 schema 不手写 JSON，而是用类型系统生成：
+
+```rust
+fn parameters(&self) -> Value {
+    serde_json::to_value(schema_for!(CalculatorArgs))
+        .expect("Failed to serialize CalculatorArgs schema")
+}
+```
+
+`CalculatorArgs` 既是参数定义，也是反序列化目标——一份类型同时服务于"告诉模型要传什么"和"解析模型传了什么"，避免了 schema 与解析逻辑漂移。
+
+目录结构上，每个工具拆成 `xxx.rs`（trait 实现）+ `xxx/definition.rs`（schema）+ `xxx/execute.rs`（业务），是典型的 Rust 模块化惯用法。
+
+**沉淀**：`Tool` trait、`ToolBox = HashMap<String, Box<dyn Tool>>`（按名索引，O(1) 查找）、`definition()` 默认实现。这三样东西到今天的 `src/tool.rs` 里只改了签名（`execute` 多了 `context` 参数、多了 `requires_confirmation`），骨架完全保留。
+
+---
+
+### 阶段 ③ MCP 接入（ep06）
+
+**问题**：工具越写越多，能不能直接接现成的工具服务？MCP（Model Context Protocol）就是干这个的。
+
+**实现细节**：`src/tools/mcp/client.rs` 用 `rmcp` 库把 MCP Server 当作**子进程**拉起，走 stdio 通信：
+
+```rust
+pub async fn connect() -> Result<Self> {
+    let service = ()
+        .serve(TokioChildProcess::new(Command::new("cargo").configure(
+            |cmd| { cmd.args(["run", "--quiet", "--bin", "expense_mcp_server"]); },
+        ))?)
+        .await?;
+    Ok(Self { service })
+}
+```
+
+拿到工具列表后，把 rmcp 的 `Tool` 适配成本项目的 `Tool` trait（`mcp/tool.rs`），于是 MCP 工具和本地工具在 Agent 眼里完全一样。
+
+调用结果的处理值得注意——MCP 返回的是 content block 数组，需要过滤出文本块再拼接：
+
+```rust
+let text = result.content.iter()
+    .filter_map(|block| block.as_text().map(|t| t.text.clone()))
+    .collect::<Vec<_>>()
+    .join("\n");
+```
+
+同时新增了 `src/bin/expense_mcp_server.rs` 作为本仓库自带的 MCP Server，实现"既当客户端又当服务端"的双向验证。
+
+**沉淀**：MCP 的接入方式（子进程 stdio + `list_tools` + `call_tool`）此后完全没变，只是服务端从 `expense_mcp_server` 换成了 `wikipedia_mcp_server`。
+
+---
+
+### 阶段 ④ Agent 运行时（ep07）
+
+**问题**：把"模型说要调工具"变成"真的去调、调完把结果喂回去、继续想"的循环。这是整个框架的心脏。
+
+**实现细节**：`src/agent/` 出现，四个文件各司其职：
+
+```mermaid
+flowchart TD
+    R["runtime.rs<br/>Agent 主循环"] --> C["context.rs<br/>ExecutionContext"]
+    R --> E["event.rs<br/>Event / ContentItem"]
+    R --> T["tools/tool.rs<br/>ToolBox"]
+```
+
+`ExecutionContext` 是"一次执行"的临时态：
+
+```rust
+pub struct ExecutionContext {
+    pub execution_id: String,
+    pub current_step: usize,
+    pub events: Vec<Event>,
+}
+```
+
+`Event` / `ContentItem` 用了**二分联合**建模，这是本项目最重要的一个架构决策：
+
+```rust
+pub enum ContentItem {
+    Message { role: String, content: String },
+    ToolCall { tool_call_id: String, name: String, arguments: Value },
+    ToolResult { tool_call_id: String, name: String, status: ToolResultStatus, content: String },
+}
+```
+
+把"消息 / 工具调用 / 工具结果"统一进一个枚举，好处是**整个会话历史只有一个类型**（`Vec<Event>`），任何地方都能遍历，不需要为工具调用单独维护一条并行历史。
+
+主循环则是标准的 ReAct：
+
+```rust
+loop {
+    if context.current_step >= self.max_steps {
+        anyhow::bail!("Agent exceeded the maximum of {} steps without a final answer", self.max_steps);
+    }
+    let messages = self.build_messages(&context)?;
+    // ... 调用模型 → 有 tool_calls 就执行工具 → 结果写回 context → 继续
+}
+```
+
+`max_steps` 保护是硬性熔断：模型可能反复调同一个工具，不设上限就会烧钱。
+
+**沉淀**：`Agent`、`ExecutionContext`、`Event`/`ContentItem`、ReAct 循环——这四样构成了后来所有阶段的地基。
+
+---
+
+### 阶段 ⑤ GAIA 对照评测（ep07-gaia）
+
+**问题**：Agent 写完了，怎么证明它有用？
+
+**实现细节**：GAIA（General AI Assistant Assessment）提供带附件的多步推理题。评测设计成**两组对照**：
+
+```mermaid
+flowchart LR
+    subgraph G1["无工具组"]
+        G1A["题目文本"] --> G1B["LLM 单次调用<br/>JSON Schema 严格模式"] --> G1C["直接输出答案"]
+    end
+    subgraph G2["带工具组"]
+        G2A["题目 + 附件路径"] --> G2B["Agent::run<br/>完整 ReAct 循环"] --> G2C["final_answer 产出答案"]
+    end
+    G1 --> CMP["准确率对比"]
+    G2 --> CMP
+```
+
+判分故意做得很朴素（去空白、忽略大小写、全等），因为 GAIA 的标准答案本身就是"尽量少的词"，复杂归一化反而会引入判分争议。
+
+**沉淀**：评测方法论。这套"同一批题目、有无工具两组、准确率对照"的框架一直沿用到今天的 `src/gaia/`，README 里记录的实测结果是：无工具 12.73%，有工具 24.85%。
+
+---
+
+### 阶段 ⑥ 回调机制（ep08）
+
+**问题**：陆续会需要"在调 LLM 前做 X"、"在调工具前做 Y"、"在工具返回后做 Z"。每加一个就要改运行时核心，运行时就会被撑成意大利面。
+
+**实现细节**：解法是**回调 trait**。`src/callback.rs` 定义三个扩展点：
+
+```mermaid
+flowchart TD
+    REQ["prepare_llm_request"] --> BL["BeforeLlmCallback<br/>(session, request) 可改写请求"]
+    BL --> THINK["think()"]
+    THINK --> ACT["act(tool_call)"]
+    ACT --> BT["BeforeToolCallback<br/>(ctx, tool_call) → Option&lt;String&gt;"]
+    BT --> EXEC["tool.execute()"]
+    EXEC --> AT["AfterToolCallback<br/>(ctx, tool_call, result) → Option&lt;String&gt;"]
+```
+
+三者都返回 `Option<String>`，语义统一为**短路**：
+
+- `BeforeToolCallback` 返回 `Some(文案)` → 拦截工具执行，该文案作为工具结果
+- `AfterToolCallback` 返回 `Some(文案)` → 用该文案替换原工具结果
+- 返回 `None` → 放行
+
+这个阶段落地了两个真实回调：
+
+**`ApprovalCallback`（before_tool）** —— 危险工具白名单：
+
+```rust
+const DANGEROUS_TOOLS: &[&str] = &["delete_file", "send_email", "execute_sql"];
+```
+
+命中后从 stdin 读一行，`y` 放行（返回 `None`），`n` 或非法输入返回错误文案（返回 `Some`）——LLM 会看到"用户拒绝执行"，并自行调整策略，而不是直接崩掉。
+
+**`SearchCompressor`（after_tool）** —— web_search 结果超过 2000 字符时自动压缩：
+
+```rust
+const COMPRESS_THRESHOLD: usize = 2000;
+const CHUNK_SIZE: usize = 500;
+const CHUNK_OVERLAP: usize = 50;
+const TOP_K: usize = 3;
+```
+
+流程是：把长结果切片 → 向量检索 query 相关的 top-3 → 拼回压缩文本。这个回调实际上**复用**了同期建设的 `knowledge_base`（RAG）模块——一个能力被两个场景共享。
+
+**沉淀**：三扩展点机制。此后 `ContextOptimizer`、`MemoryInjectionCallback` 全都是挂在这个机制上的新回调，运行时核心再没改过结构。
+
+---
+
+### 阶段 ⑦ 上下文优化（ep09）
+
+**问题**：长会话必然撑爆上下文。要么截断，要么压缩，但直接截断会把工具调用和结果配对拆散，触发 API 报错。
+
+**实现细节**：这个阶段先做了一件基础工作——把"发给 LLM 的请求"从 `runtime.rs` 里抽成独立类型 `src/agent/llm_request.rs`：
+
+```rust
+pub struct LlmRequest {
+    pub instructions: Vec<String>,
+    pub contents: Vec<ContentItem>,
+    pub tools: Option<Vec<Box<dyn Tool>>>,
+    pub tool_choice: ToolChoice,
+}
+```
+
+有了可改写的请求对象，`ContextOptimizer` 才能作为 `BeforeLlmCallback` 挂上去。它提供三种手段，按代价从低到高依次尝试：
+
+```mermaid
+flowchart TD
+    A["count_tokens(model, request)<br/>tiktoken cl100k_base"] --> B{"token > threshold?"}
+    B -->|no| Z(["直接返回"])
+    B -->|yes| C["① Compaction<br/>按工具名规则把大结果换成占位文本"]
+    C --> D{"仍超阈值?"}
+    D -->|no| Z
+    D -->|yes| E["② Summarization<br/>LLM 生成中段摘要"]
+    E --> F["③ SlidingWindow<br/>保留首条 user + 最近 N 条"]
+```
+
+三种手段的关键实现细节：
+
+**Compaction（规则压缩）** —— 用一张工具名 → 占位文本的规则表，把大块内容替换掉：
+
+```rust
+TOOLRESULT_COMPACTION_RULES = {
+    "read_file"    => "File content from {file_path}. Re-read if needed.",
+    "tavily_search"=> "Search results processed. Query: {query}. Re-search if needed.",
+}
+```
+
+`{file_path}` / `{query}` 从对应的 `ToolCall.arguments` 里提取。压缩后模型仍知道"这里有内容、需要时可以重新读"，但 token 降了三个数量级。
+
+**Summarization（增量摘要）** —— 关键是不每次重做，而是靠 session state 里的两个键做增量：
+
+```
+session.state["last_summary_idx"]  → 上次摘要覆盖到的内容下标
+session.state["context_summary"]   → 已累积的摘要全文
+```
+
+下一轮只摘要 `[last_summary_idx+1 .. len-keep_recent]` 这一段，摘要文本追加到旧摘要后面。`keep_recent` 默认 5，即永远保留最近 5 条原文不摘要。
+
+**SlidingWindow（滑动窗口）** —— 保留首条 user 消息 + 最近 N 条，其余裁掉。
+
+**最容易被忽略的实现难点：孤儿 ToolCall 修复**。裁剪历史时，如果某个 `ToolResult.tool_call_id` 对应的 `ToolCall` 被裁掉了，OpenAI 接口会直接报错（tool message 找不到对应 assistant tool_calls）。因此裁剪后必须做一次"配对修复"：
+
+```
+裁剪前:  [user] [call_A] [result_A] [call_B] [result_B] [call_C] [result_C]
+                            ↑ 被裁掉
+裁剪后:  [user]              [call_C] [result_C]
+                              └─ 补回 call_B，保证 result_B 有对应 call
+```
+
+实现方式是：从保留下来的片段收集所有 `ToolCall.tool_call_id`，找出 id 不在其中（孤儿）的 `ToolResult`，再回到 `session.events` 里把对应的 `ToolCall` 找回并插回。
+
+**沉淀**：`LlmRequest` 抽象 + 三种优化手段 + 孤儿修复。这一层逻辑此后基本没变，只是被重构到 `src/agent/callback/before_llm_callback/context_optimizer/` 下。
+
+---
+
+### 阶段 ⑧ 会话管理与工具审批（ep10）
+
+**问题**：两个具体痛点。一是**跨多轮**——`run()` 结束后上下文就没了，没法连续对话；二是**危险操作**——`ApprovalCallback` 的阻塞式 stdin 读取只能用于交互式终端，嵌进服务就废了。
+
+**实现细节**：
+
+**会话抽象** —— `src/session/` 引入 `Session` 与 `SessionManager`：
+
+```rust
+pub struct Session {
+    pub session_id: String,
+    pub user_id: Option<String>,
+    pub events: Vec<Event>,
+    pub state: HashMap<String, Value>,   // 扩展状态字典
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+`state: HashMap<String, Value>` 是刻意设计的**弱类型扩展槽**：框架不认识的键（`tool_confirmations`、`context_summary`、`last_summary_idx`）都放这里，避免为了加一个状态就给 `Session` 加字段。`SessionManager` 是 trait，默认实现是内存版，后续可插拔 SQLite / Redis。
+
+**两阶段审批协议** —— 这是本项目"人工介入"的核心机制，跨越两次 `run()` 调用：
+
+```mermaid
+sequenceDiagram
+    participant U as 宿主应用
+    participant A as Agent
+    participant S as SessionManager
+    Note over U,S: ——— 第 1 次 run() ———
+    U->>A: run(prompt, session_id, None)
+    A->>A: requires_confirmation() == true
+    A->>A: 记 ToolCall 事件 + add_pending_tool_call
+    A->>S: save(session)
+    A-->>U: AgentResult(output=None, status=PendingConfirmation)
+    Note over U,S: ——— 宿主收集决定 ———
+    U->>A: run(prompt, session_id, Some(confirmations))
+    A->>A: state["tool_confirmations"] = JSON
+    A->>A: process_confirmations()
+    A->>A: approved → 执行（参数可被改写）<br/>rejected → ToolResult(Error, reason)
+    A->>A: 清空 pending_tool_calls 与 state
+    A->>S: save(session)
+    A-->>U: AgentResult(output, Complete)
+```
+
+两个设计细节值得强调：
+
+1. **审批结果放在 `session.state` 里跨调用传递**，而不是靠内存传递——所以这个机制天然支持"进程重启后仍可恢复审批"。
+2. **`ToolConfirmation.modified_arguments`** 允许审批者在批准的同时**改写工具参数**。例如批准 `delete_file` 但把路径换成别的目录，这比简单的 yes/no 实用得多。
+
+同时，这个阶段把 `runtime.rs` 按职责拆开（`refactor-after-ep10`），并引入 `src/agent/tool_exec.rs` 承接工具执行逻辑。
+
+**沉淀**：`SessionManager` 抽象、`state` 扩展字典、两阶段审批协议。这三样到今天仍是同一套语义。
+
+---
+
+### 阶段 ⑨ 长期记忆（ep11）
+
+**问题**：会话内的上下文能记住，但**跨会话**的经验完全丢失。一个反复犯的错误，Agent 每次都要重犯。
+
+**实现细节**：核心是 `src/memory/manager.rs` 的 `TaskMemoryManager`，一条完整的写入链路包含 6 步：
+
+```mermaid
+flowchart TD
+    E["events"] --> S1["① format_execution_history<br/>压成纯文本，Tool Result 截断 500 字符"]
+    S1 --> S2["② extract_memory<br/>LLM 结构化输出 ask::&lt;TaskMemory&gt;"]
+    S2 --> S3["③ embed_text('Task: ' + summary)"]
+    S3 --> S4["④ store.query(embedding, TOP_K=3)<br/>过滤 similarity ≥ 0.8"]
+    S4 --> S5{"有候选?"}
+    S5 -->|no| S9
+    S5 -->|yes| S6["⑤ is_duplicate<br/>LLM 判定 ADD / SKIP"]
+    S6 --> S7{"判为重复?"}
+    S7 -->|yes| SX["跳过存储"]
+    S7 -->|no| S9
+    S9["⑥ store.add(uuid, memory, embedding)<br/>SQLite INSERT"]
+```
+
+沉淀下来的记忆结构：
+
+```rust
+pub struct TaskMemory {
+    pub task_summary: String,           // 问题摘要（中性描述，不含结果）
+    pub approach: String,               // 实际使用的方法
+    pub final_answer: String,
+    pub is_correct: bool,
+    pub error_analysis: Option<String>,
+}
+```
+
+几个关键决策：
+
+**（1）查重标准包含"结果"**，所以比较文本必须带上 `final_answer`：
+
+```rust
+fn render_for_dedup(mem: &TaskMemory) -> String {
+    format!("task_summary: {}, approach: {}, final_answer: {}, is_correct: {}",
+        mem.task_summary, mem.approach, mem.final_answer, mem.is_correct)
+}
+```
+
+判重语义：同问题+不同方法 **或** 不同结果 → 新信息（ADD）；同问题+同方法+同结果 → 重复（SKIP）。
+
+**（2）查重失败默认返回 false（继续存储）**。理由是记忆是辅助功能，宁可多存也不要因一次 LLM 抖动丢掉经验——这是"失败偏向可用"的取舍。
+
+**（3）`Mutex<Connection>` 包裹 SQLite 连接**。注释里写清了原因：
+
+```rust
+/// 用 Mutex 包裹 Connection：rusqlite::Connection 内部用 RefCell
+/// 做单线程内部可变性，天生不满足 Sync。Tool trait 要求
+/// `Send + Sync`（因为要塞进 Box<dyn Tool> 在多线程 runtime 里跑），
+/// Mutex<T> 只要 T: Send 就自动是 Sync。
+```
+
+这是"类型系统约束驱动设计"的典型例子：不是先想到要加锁，而是 `Tool: Send + Sync` 这个约束逼出来的。
+
+**（4）注入用 `Mutex<Option<CachedRecall>>` 缓存**，避免同一 query 反复 embedding：
+
+```
+每轮请求 → 取最近一条 user 消息作为 query
+   ├─ 缓存命中（同 query）→ 直接复用文本
+   ├─ 未命中 → search(query, top_k=3)
+   │     ├─ 命中 → 缓存 (query, Some(text))
+   │     ├─ 空结果 → 缓存 (query, None)（避免反复空检索）
+   │     └─ 出错 → 不缓存，下次重试
+```
+
+这里有个 Rust 特有的坑：因为 `MutexGuard` 不能跨 `.await` 持有，代码把"查缓存"和"写缓存"拆成了两个独立函数。
+
+**沉淀**：`TaskMemoryManager`、`TaskMemory`、`TaskMemoryStore`（SQLite）、`MemoryInjectionCallback`。注入文本格式固定为：
+
+```
+以下是过去解决类似问题的记录:
+<PAST_EXPERIENCES> ... </PAST_EXPERIENCES>
+请参考成功的方法,避免重复失败的尝试。
+```
+
+---
+
+### 阶段 ⑩ 分层重构（ep11-refactored）
+
+**问题**：到 ep11 为止，代码是"边写边长"出来的。目录名与职责已经开始错位（例如 `src/tools/` 复数、`src/callback/` 与 `src/agent/callback/` 语义重复），继续加功能只会更乱。
+
+**实现细节**：这一次重构改动 **117 个文件、+5327 / -3871 行**，是一次整体搬迁而非局部修补。核心规则是"**目录名 = 职责名**"：
+
+| 重构前                                              | 重构后                                       | 变化原因                                       |
+| --------------------------------------------------- | -------------------------------------------- | ---------------------------------------------- |
+| `src/tools/`                                        | `src/tool/`                                  | 与 `Tool` trait 同名，扁平化后每个工具一个文件 |
+| `src/callback/` + `src/agent/callback.rs`           | `src/agent/callback/before_llm_callback/` 等 | 回调按**触发时机**分目录，名字自带语义         |
+| `src/knowledge_base/`                               | `src/search/`                                | 它不是"知识库"，而是"检索能力"，与 memory 解耦 |
+| `src/memory/manager.rs`                             | `src/memory/memory_manager.rs`               | 避免与 `memory` 模块名混淆                     |
+| `src/tools/xxx/{impl,execute,definition}.rs` 三段式 | `src/tool/xxx.rs` 单文件                     | 三段式在 Rust 里割裂了同一个类型的上下文       |
+| `src/agent/llm_request.rs`                          | `src/llm/llm_request.rs`                     | `LlmRequest` 是 LLM 协议层的事，不属于 agent   |
+| `src/gaia/models.rs`                                | `src/gaia/model.rs`                          | 与 Rust 类型命名惯例一致                       |
+
+> **注意 `src/knowledge/` 与历史 `src/knowledge_base/` 的区别**：
+> 历史上的 `src/knowledge_base/` 只是切片 + embedding + 检索的**原语集合**，
+> 没有存储层，每次检索都要把候选重新算一遍向量，所以当时判定它"不是知识库"
+> 而并入了 `src/search/`。
+> 后来新增的 `src/knowledge/` 才是真正的**文档知识库**：切片向量落到 SQLite，
+> 检索时直接查库，并提供入库 / 删除 / 列表等完整管理能力。
+> 两者是**互补**关系，不是重复：`src/search/` 提供原语，`src/knowledge/` 提供落地。
+
+重构后的 `src/agent/callback/` 目录本身就是一种文档：
+
+```
+src/agent/callback/
+├── before_llm_callback.rs          trait 定义
+├── before_llm_callback/
+│   ├── memory_injection.rs         记忆注入
+│   └── context_optimizer.rs        上下文优化
+│       ├── compaction.rs
+│       ├── sliding_window.rs
+│       └── summarization.rs
+├── before_tool_callback.rs
+├── before_tool_callback/approval_callback.rs
+└── after_tool_callback.rs
+└── after_tool_callback/search_compressor.rs
+```
+
+**沉淀**：这是整个项目**最重要的一次投资**。此后所有新功能（沙箱、多智能体、技能）都只是往这套目录里填文件，没有任何一次再做过结构性重排。
+
+---
+
+### 阶段 ⑪ 规划与反思（ep12）
+
+**问题**：Agent 缺少两种表达：一是"我现在有哪些待办"（进度不可见），二是"我刚才走错了"（模型很难自我否定）。
+
+**实现细节**：
+
+**`create_tasks`（规划）** —— 让模型显式维护任务清单。数据结构极简：
+
+```rust
+pub struct Task { pub content: String, pub status: TaskStatus }
+pub enum TaskStatus { Pending, InProgress, Completed }
+```
+
+`Display` 实现直接渲染成 Markdown 风格清单，让进度**显式出现在对话历史里**：
+
+| 状态         | 渲染           |
+| ------------ | -------------- |
+| `Pending`    | `[ ] 内容`     |
+| `InProgress` | `[>] **内容**` |
+| `Completed`  | `[x] ~~内容~~` |
+
+关键约束是模型**每次必须重新生成整个清单**并更新状态，而不是做增量修改——这样清单永远是当前状态的完整快照，不存在状态漂移。
+
+**`reflection`（反思）** —— 参数只有两个字段：
+
+```rust
+pub struct ReflectionArgs {
+    pub analysis: String,
+    pub need_replan: bool,
+}
+```
+
+它的作用不是"让模型再想一遍"，而是**制造一个显式的决策点**：模型必须写下问题出在哪，并明确声明是否需要重新规划。`need_replan` 为真时，配合 `create_tasks` 就能触发一次计划重排。
+
+同阶段还加了 `AlwaysFailingWikipediaTool`——一个**故意失败**的工具，用来演示模型在工具报错后的恢复行为（今天仍在 `build_basic_toolbox` 里，交互模式会把它删掉）。
+
+**沉淀**：`planning/` 模块、`create_tasks` 工具、`reflection` 工具。
+
+---
+
+### 阶段 ⑫ 代码沙箱（ep13）
+
+**问题**：让模型执行真实代码是能力跃迁，但也是最大的安全风险。直接在宿主跑 Python 等于把机器交给模型。
+
+**实现细节**：`src/sandbox/` 的架构是**容器隔离 + 宿主桥接**两层：
+
+```mermaid
+flowchart TD
+    subgraph HOST["宿主进程"]
+        A["Agent"] --> T["execute_python / bash_tool"]
+        T --> EX["CodeExecutor trait<br/>run_python / run_bash / write_file"]
+        subgraph P["PodmanSandbox"]
+            P1["podman run<br/>--network=none<br/>--read-only<br/>--memory=512m<br/>--pids-limit=256"]
+        end
+        EX --> P
+        P <-->|"stdio JSON 协议"| BR["runner.py<br/>沙箱内常驻进程"]
+        BR --> BRIDGE["_call_tool<br/>宿主工具回调"]
+    end
+```
+
+安全策略写在 `PodmanConfig` 的默认值里：
+
+```rust
+PodmanConfig {
+    memory: "512m",
+    cpus: 1.0,
+    pids_limit: 256,
+    network: NetworkPolicy::Disabled,   // 默认断网
+    read_only_rootfs: true,             // 根文件系统只读
+    lifetime: Duration::from_secs(300),// 会话最长 5 分钟
+    exec_timeout: Duration::from_secs(30),
+    ..Default::default()
+}
+```
+
+**宿主桥接（bridge）** 是设计上最巧的一环。沙箱里的 Python 可以直接调用宿主上的工具（比如查 Wikipedia 版本历史），做法是：
+
+1. 宿主为每个 `SandboxTool` 生成一段 Python stub 注入沙箱：
+
+```rust
+pub fn python_stub(tool: &dyn SandboxTool) -> String {
+    format!(
+        "def {name}(**kwargs):\n    \"\"\"{desc}\"\"\"\n    return _call_tool(\"{name}\", kwargs)\n"
+    )
+}
+```
+
+2. `runner.py` 收到调用后，通过 stdin 把 JSON 发回宿主；
+3. 宿主执行真正的工具，把结果写回 stdout；
+4. Python stub 返回结果。
+
+注意 `SandboxTool` 的签名**故意不带 `ExecutionContext`**——沙箱内的代码不能依赖 Agent 状态，这是有意的隔离边界。
+
+**配置开关**（`.env`）：
+
+```
+CODE_EXECUTION=off|podman     # off = 禁用
+SANDBOX_WORKSPACE=./workspace # 挂载为 /workspace
+UPLOAD_ROOT=                  # 上传白名单根目录
+SKILLS_DIR=                   # 只读挂载为 /skills
+```
+
+`register_code_tools` 在 `CODE_EXECUTION` 未开启时直接返回空，工具也不注册——沙箱是完全可选的能力。
+
+**沉淀**：`sandbox/` 模块（`config` / `podman` / `runner` / `bridge` / `workspace`）、`execute_python` / `bash_tool` / `upload_file` 三个工具。
+
+---
+
+### 阶段 ⑬ 多智能体（ep14）
+
+**问题**：单个 Agent 什么都会一点但什么都不精，而且不同子任务需要不同的工具集、不同的系统提示、不同的步数预算。
+
+**实现细节**：这一阶段实现了**两种不同的协作模式**，它们的语义差别很大：
+
+| 模式                 | 上下文                         | 控制权                                       | 典型场景             |
+| -------------------- | ------------------------------ | -------------------------------------------- | -------------------- |
+| **Transfer**（交接） | **同一 session**，共享全部历史 | 转移后**不返回**原 agent，由专家直接回答用户 | 路由到专业领域       |
+| **Agent-as-Tool**    | 子代理**全新 session**         | 返回后控制权回到调用方                       | 并行调研、作为子能力 |
+
+**Transfer 模式**通过动态生成的 `transfer_to_agent` 工具实现。这个工具每步都根据当前 Agent 树重新生成：
+
+```rust
+pub fn transfer_tool_definition(&self) -> Option<ChatCompletionTools> {
+    let targets = self.transfer_targets();
+    if targets.is_empty() { return None; }
+    match TransferTool::new(targets).definition() { ... }
+}
+```
+
+刻意**不做缓存**：Agent 建立父子关系后兄弟节点才可见，按需生成比构造时缓存更不容易产生过期数据。
+
+Rust 特有的实现难点是**父子循环引用**：`Arc<Agent>` 持子节点、子节点需要 `Weak<Agent>` 指回父节点，否则 `Arc` 计数永远不归零。所以用了 `OnceLock`：
+
+```rust
+sub_agents: OnceLock<Vec<Arc<Agent>>>,   // 强引用：持有子节点
+parent: OnceLock<Weak<Agent>>,            // 弱引用：指回父节点，避免泄漏
+```
+
+因为 Rust 必须先有 `Arc<Self>` 才能创建 `Weak<Self>`，树的组装被拆成两步：
+
+```rust
+let math = Arc::new(Agent::new(...));
+let router = Arc::new(Agent::new(...));
+router.set_sub_agents(vec![math])?;
+```
+
+`set_sub_agents` 里做了一整套校验：同级重名、单父节点、整棵树重名、环形引用。单元测试覆盖了这些边界：
+
+```rust
+#[test] fn an_agent_cannot_have_two_parents() { ... }
+#[test] fn duplicate_names_across_branches_are_rejected() { ... }
+#[test] fn cycles_are_rejected() { ... }
+```
+
+**运行时交接**发生在一步结束之后，而不是在 `Tool::execute` 里：
+
+```rust
+// 一步结束后检查转移请求
+if let Some(target_name) = context.transfer_to.take() {
+    if context.transfer_count >= MAX_TRANSFERS { /* 熔断，防止无限来回 */ }
+    let next_agent = self.find_transfer_target(&target_name)?;
+    context.current_step = 0;                    // 每个 agent 有自己的步数预算
+    context.transfer_count += 1;
+    context.transfer_history.push(format!("{} -> {}", self.name, next_agent.name));
+    return Box::pin(next_agent.run_in_context(context)).await;  // 递归装箱，避免无限大小 Future
+}
+```
+
+两个细节：交接前先 `save` 一次会话，避免接手的 agent 中途失败丢会话；`Box::pin` 是因为递归调用会产生无限大小的 Future，必须装箱。
+
+**Workflow 编排**（`src/multi_agent/workflow/`）提供三种组合：
+
+| 工作流               | 语义                                      | 上下文处理                                         |
+| -------------------- | ----------------------------------------- | -------------------------------------------------- |
+| `SequentialWorkflow` | 串行流水线，后一个看得到前一个的工作      | 共享同一 context                                   |
+| `ParallelWorkflow`   | 并行分叉，各分支基于同一初始状态          | 每个分支拿 context **副本**，结果按 agent 顺序合并 |
+| `LoopWorkflow`       | 循环直到达标（如评分 ≥ 85）或达到最大轮数 | 共享，writer ↔ reviewer 反复迭代                   |
+
+`LoopWorkflow` 的终止条件是它比 `Sequential` 多出来的东西——串行工作流跑一次就完，循环工作流需要"够好了才停"。
+
+**沉淀**：`AgentNode` trait（统一 `Agent` 与 `Workflow` 的节点接口）、`TransferTool`、`AgentTool`、`multi_agent/workflow/` 三种编排。
+
+---
+
+### 阶段 ⑭ 终端交互产品化（interactive-terminal）
+
+**问题**：框架能力已经齐了，但用户面对的仍然是一个需要写代码才能用的库。
+
+**实现细节**：`src/main.rs` 被重写为**行式 REPL**，关键技术选择：
+
+```mermaid
+flowchart TD
+    A["stdin 读一行"] --> B{"以 / 开头?"}
+    B -->|是| C["handle_command<br/>/help /new /status /agents /tools /history /remember /clear /quit"]
+    B -->|否| D["run_turn"]
+    D --> E["run_in_context(root)"]
+    E --> F{"AgentStatus"}
+    F -->|Complete| G["termimad 渲染 Markdown"]
+    F -->|PendingConfirmation| H["终端 y/n 询问"]
+    H -->|最多 5 轮| E
+    F -->|Error| I["打印错误"]
+```
+
+刻意**不进入 alternate screen**：这样用户可以正常滚动、复制粘贴上一轮的输出。`termimad` 的 `MadSkin` 负责把回答渲染成终端 Markdown。
+
+Agent 树在启动时一次性装配，工具按专长分配：
+
+```
+assistant（根，24 步）：文件、规划、反思、记忆、MCP
+├── researcher（12 步）：web_search + github_stars
+├── math（6 步）：calculator
+└── coder（12 步）：execute_python + bash_tool + upload_file + 文件工具
+```
+
+`/status`、`/agents`、`/tools`、`/history` 这些命令把框架的内部状态（Agent 树、工具清单、事件流）**暴露给用户看**——既是调试手段，也是产品能力。
+
+沙箱 prompt 会被拼接进 coder 的系统提示：
+
+```rust
+let mut coder_instructions = CODER_INSTRUCTIONS.to_owned();
+if !sandbox_prompt.is_empty() {
+    coder_instructions.push_str("\n\n");
+    coder_instructions.push_str(&sandbox_prompt);
+}
+```
+
+**沉淀**：一个可以直接当产品用的终端 Agent。
+
+---
+
+### 阶段 ⑮ 本地增强（21 个提交）
+
+上游 ep14 之后，本地继续推进了 21 个提交，把项目从"跟随教程"变成"自己的项目"：
+
+| 提交                              | 内容                                                          |
+| --------------------------------- | ------------------------------------------------------------- |
+| `21a73df`                         | 初始化：LLM 工具箱 + 工具调用支持                             |
+| `e098a0f` / `adb6cf0` / `024582e` | 新增 LLM 前后与任务结束回调、交互式审批回调、上下文优化器重构 |
+| `d66a45f`                         | 会话管理接入 Agent 执行流程                                   |
+| `ff12606`                         | 工具执行的**用户反馈机制**                                    |
+| `32e99b4`                         | 覆盖为 upstream `ep11-refactored` 代码结构                    |
+| `4ca37e8`                         | 项目从 `study-agent` 更名为 `zephyr`                          |
+| `137f702` / `b1329ef`             | 新工具入库、新依赖与环境变量                                  |
+| `2dd43fa`                         | Agent 之间的 transfer 能力                                    |
+| `c599d2b`                         | `.gitignore` / Cargo 更新，工具功能增强                       |
+
+同时新增了两个本项目独有的模块：
+
+**`src/skill.rs`（技能加载）** —— 一种"渐进式披露"的提示词技术：
+
+```rust
+/// A skill: a folder containing a `SKILL.md`. Only `name` and `description` go into the prompt;
+/// the full instructions are read on demand, which keeps the prompt small.
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+```
+
+只把 `name` + `description` 注入系统提示，完整指令由模型自己在沙箱里 `cat /skills/<name>/SKILL.md` 读取。这样无论装多少技能，提示词都不会膨胀。技能目录被只读挂载进沙箱。
+
+**`src/tool/github_stars.rs`** —— 精确查询 GitHub Star 数（避免模型凭记忆编造数字）。
+
+---
+
+### 演进规律总结
+
+把 15 个阶段串起来看，有五条贯穿始终的技术规律：
+
+**规律一：先立契约，再填实现。** 每个阶段都先定义 trait（`Tool`、`SessionManager`、`CodeExecutor`、`AgentNode`、`SandboxTool`），实现可以后补、可以替换。这让 `ToolBox` 里既有本地工具、又有 MCP 工具、又有 Agent-as-Tool，对 Agent 而言毫无区别。
+
+**规律二：横切能力一律走回调，不改运行时。** 审批、压缩、记忆注入、搜索结果压缩，全部通过 `BeforeLlmCallback` / `BeforeToolCallback` / `AfterToolCallback` 挂载。运行时核心从 ep08 之后再没改过结构——新增能力不需要重新审视主循环。
+
+**规律三：状态与协议解耦。** `AgentEvent` / `ContentItem` 是内部事件模型，`LlmRequest::build_message()` 负责翻译成 OpenAI 的 `messages`。因此换成 Anthropic 的 API 只需要改一个文件。
+
+**规律四：失败偏向可用。** 查重失败 → 继续存储；记忆检索出错 → 不缓存下次重试；MCP 起不来 → 回退基础工具集；沙箱不可用 → 关闭代码执行但保留对话。辅助能力失败不应该拖垮主流程。
+
+**规律五：一切可观测。** 从 ep07 的 `tracing` 日志，到 ep08 的审批回调输出，到 ep14 的 `/status` `/agents` `/history` 命令，到每一步的 `transfer_history` 路径记录。Agent 的多步行为本质上是黑盒，不给观察窗口就无法调试。
+
+### 技术选型速查
+
+| 领域        | 选型                          | 为什么                                              |
+| ----------- | ----------------------------- | --------------------------------------------------- |
+| LLM SDK     | `async-openai`                | OpenAI 兼容协议可复用多家网关（百炼 / OpenRouter）  |
+| Schema 生成 | `schemars`                    | 从 Rust 类型反推 JSON Schema，杜绝手写 schema 漂移  |
+| 协议适配    | `rmcp`                        | 官方 MCP Rust 实现，支持子进程 stdio 传输           |
+| 结构化解析  | `serde_json` + `strict: true` | 网关侧强制约束 + 本地反序列化双保险                 |
+| 重试        | `backon` 指数退避             | 声明式写法，`when(is_retryable)` 精确控制可重试类型 |
+| 持久化      | `rusqlite`（bundled）         | 单文件、零运维；`bundled` 免去系统装 SQLite         |
+| 相似度      | 余弦相似度                    | 向量归一化后等价于点积，实现简单                    |
+| 沙箱        | Podman                        | rootless 容器，网络默认关闭，根文件系统只读         |
+| Token 计数  | `tiktoken-rs`                 | 与主流模型 tokenizer 一致，阈值判断可靠             |
+| 终端渲染    | `termimad`                    | 终端内 Markdown 渲染，不侵入 alternate screen       |
 
 ---
 
@@ -127,92 +1027,108 @@ flowchart LR
 
 ### 阶段 ① 骨架：先看清"一次 run 做了什么"
 
-| 顺序 | 文件 | 读它是为了知道 |
-| --- | --- | --- |
-| 1 | `src/main.rs` | 全部依赖怎么装配、Agent 怎么被配置 |
-| 2 | `src/agent/runtime.rs` | 主循环长什么样、什么条件下结束 |
-| 3 | `src/agent/runtime/step.rs` | 一步 = 准备请求 → 调 LLM → 执行工具 → 判定终局 |
-| 4 | `src/agent/model.rs` | `Agent` 有哪些字段、回调怎么注册、请求怎么准备 |
-| 5 | `src/agent/runtime/think.rs` | 真正发给 LLM 的请求长什么样 |
+| 顺序 | 文件                         | 读它是为了知道                                 |
+| ---- | ---------------------------- | ---------------------------------------------- |
+| 1    | `src/main.rs`                | 全部依赖怎么装配、Agent 怎么被配置             |
+| 2    | `src/agent/runtime.rs`       | 主循环长什么样、什么条件下结束                 |
+| 3    | `src/agent/runtime/step.rs`  | 一步 = 准备请求 → 调 LLM → 执行工具 → 判定终局 |
+| 4    | `src/agent/model.rs`         | `Agent` 有哪些字段、回调怎么注册、请求怎么准备 |
+| 5    | `src/agent/runtime/think.rs` | 真正发给 LLM 的请求长什么样                    |
 
 > 读完这 5 个文件，就应该能画出"一次 `run()` 的完整流程图"。
 
 ### 阶段 ② 数据模型：把概念对应到类型
 
-| 顺序 | 文件 | 读它是为了知道 |
-| --- | --- | --- |
-| 6 | `src/agent/event.rs` | `AgentEvent` / `ContentItem` 三种内容如何组织历史 |
-| 7 | `src/session/model.rs` | `Session` 三块数据（events / state / pending_tool_calls） |
-| 8 | `src/agent/context.rs` | `ExecutionContext` 与 `Session` 的区别（前者是单次执行的临时态） |
+| 顺序 | 文件                   | 读它是为了知道                                                   |
+| ---- | ---------------------- | ---------------------------------------------------------------- |
+| 6    | `src/agent/event.rs`   | `AgentEvent` / `ContentItem` 三种内容如何组织历史                |
+| 7    | `src/session/model.rs` | `Session` 三块数据（events / state / pending_tool_calls）        |
+| 8    | `src/agent/context.rs` | `ExecutionContext` 与 `Session` 的区别（前者是单次执行的临时态） |
 
 ### 阶段 ③ 单步流程：把工具与确认机制吃透
 
-| 顺序 | 文件 | 读它是为了知道 |
-| --- | --- | --- |
-| 9 | `src/agent/runtime/act.rs` | 工具怎么执行、回调怎么短路、确认怎么挂起 |
-| 10 | `src/tool.rs` | `Tool` trait 契约、`build_toolbox()` 装配逻辑 |
-| 11 | `src/agent/tool_confirmation.rs` | 审批数据结构和两阶段恢复协议 |
-| 12 | `src/llm/llm_request.rs` | 事件如何翻译成 OpenAI 的 `messages` |
+| 顺序 | 文件                             | 读它是为了知道                                |
+| ---- | -------------------------------- | --------------------------------------------- |
+| 9    | `src/agent/runtime/act.rs`       | 工具怎么执行、回调怎么短路、确认怎么挂起      |
+| 10   | `src/tool.rs`                    | `Tool` trait 契约、`build_toolbox()` 装配逻辑 |
+| 11   | `src/agent/tool_confirmation.rs` | 审批数据结构和两阶段恢复协议                  |
+| 12   | `src/llm/llm_request.rs`         | 事件如何翻译成 OpenAI 的 `messages`           |
 
 ### 阶段 ④ 扩展点：理解框架的"可插拔"设计
 
-| 顺序 | 文件 | 读它是为了知道 |
-| --- | --- | --- |
-| 13 | `src/agent/callback/before_llm_callback.rs` | 回调 trait 的签名与语义 |
-| 14 | `src/agent/callback/before_tool_callback.rs` | 同上 |
-| 15 | `src/agent/callback/after_tool_callback.rs` | 同上 |
+| 顺序 | 文件                                         | 读它是为了知道          |
+| ---- | -------------------------------------------- | ----------------------- |
+| 13   | `src/agent/callback/before_llm_callback.rs`  | 回调 trait 的签名与语义 |
+| 14   | `src/agent/callback/before_tool_callback.rs` | 同上                    |
+| 15   | `src/agent/callback/after_tool_callback.rs`  | 同上                    |
 
 ### 阶段 ⑤ 能力模块：按兴趣深入
 
-| 方向 | 文件 | 亮点 |
-| --- | --- | --- |
-| 记忆 | `src/memory/memory_manager.rs` | 提取 → embedding → 查重 → 存储的完整链路 |
-| 上下文 | `src/agent/callback/before_llm_callback/context_optimizer.rs` | token 预算管理三种手段 |
-| 检索 | `src/search/vector_search.rs` | RAG 管线的实现 |
-| 评测 | `src/gaia/` | 有/无工具对照实验 |
-| MCP | `src/tool/mcp/client.rs` | 子进程 stdio 协议 |
+| 方向     | 文件                                                          | 亮点                                     |
+| -------- | ------------------------------------------------------------- | ---------------------------------------- |
+| 记忆     | `src/memory/memory_manager.rs`                                | 提取 → embedding → 查重 → 存储的完整链路 |
+| 上下文   | `src/agent/callback/before_llm_callback/context_optimizer.rs` | token 预算管理三种手段                   |
+| 检索     | `src/search/vector_search.rs`                                 | RAG 管线的实现                           |
+| 评测     | `src/gaia/`                                                   | 有/无工具对照实验                        |
+| MCP      | `src/tool/mcp/client.rs`                                      | 子进程 stdio 协议                        |
+| 沙箱     | `src/sandbox/podman.rs` + `bridge.rs`                         | 容器隔离 + 宿主工具回调                  |
+| 多智能体 | `src/multi_agent/workflow/`                                   | 串行 / 并行 / 循环三种编排               |
+| 技能     | `src/skill.rs`                                                | 只注入 name/description 的渐进式披露     |
 
-### 容易踩坑的三个点
+### 容易踩坑的四个点
 
 ```mermaid
 flowchart TD
     P1["① Agent.model 字段<br/>实际未被 think&#40;&#41; 使用<br/>模型常量是硬编码的"]
-    P2["② pending_tool_calls<br/>只在 run&#40;&#41; 入口检查<br/>第 2 次 run 需再次传入 confirmations"]
+    P2["② 审批结果跨调用传递<br/>run&#40;&#41; 需显式传 confirmations<br/>或直接写 session.state"]
     P3["③ ContextOptimizer 的<br/>sliding_window 已实现<br/>但未挂到 before_llm_call"]
+    P4["④ transfer 走动态工具<br/>think&#40;&#41; 必须用 request.tools<br/>不能重新取 tool_definitions"]
 
     style P1 fill:#fff4e6
     style P2 fill:#fff4e6
     style P3 fill:#fff4e6
+    style P4 fill:#fff4e6
 ```
+
+补充说明：
+
+- **①** `src/agent/runtime/think.rs` 里 `.model(GPT_6_LUNA_PRO_MODEL)` 是写死的，`Agent.model` 字段目前只作记录用。
+- **②** `prepare_llm_request` 检测的是 `session.pending_tool_calls` + `session.state["tool_confirmations"]` 的组合。通过 `Agent::run(prompt, id, Some(confirmations))` 走标准入口，或像 `src/main.rs` 那样直接写 `state` 再调 `run_in_context` 都可以。
+- **③** `sliding_window::slide_window()` 已实现但没有挂进 `before_llm_call` 的自动流程，需要手动调用。
+- **④** `think()` 必须用 `llm_request.tools` 而不是 `self.tool_definitions()`，否则动态生成的 `transfer_to_agent` 会被丢掉。
 
 ---
 
 ## 图解总览
 
-全篇用 20+ 张图串起整个项目。建议按下表顺序阅读：
+全篇用 30+ 张图串起整个项目。建议按下表顺序阅读：
 
-| # | 图 | 所在小节 | 类型 | 回答什么问题 |
-| --- | --- | --- | --- | --- |
-| 1 | 项目全景脑图 | [项目全景脑图](#项目全景脑图) | mindmap | 这个项目有哪些部分？ |
-| 2 | 模块依赖关系图 | [分层架构图](#分层架构图) | flowchart | 模块之间怎么依赖？ |
-| 3 | 层级职责速览 | [分层架构图](#分层架构图) | flowchart | 五层职责怎么划？ |
-| 4 | Agent 主流程（入口 + 主循环） | [Agent 运行主流程](#agent-运行主流程) | flowchart | `run()` 前后做了什么？ |
-| 5 | Agent 状态机 | [Agent 运行主流程](#agent-运行主流程) | stateDiagram | `run()` 可能返回哪些状态？ |
-| 6 | 单步决策树 | [Agent 运行主流程](#agent-运行主流程) | flowchart | LLM 响应三种分支分别怎么走？ |
-| 7 | 工具执行细节 | [Agent 运行主流程](#agent-运行主流程) | flowchart | `act.rs` 里发生了什么？ |
-| 8 | 工具确认时序图 | [Agent 运行主流程](#agent-运行主流程) | sequenceDiagram | 人工审批如何跨两次 `run()`？ |
-| 9 | 回调三个扩展点 | [回调机制](#回调机制callback) | flowchart | 回调能改写什么？ |
-| 10 | 回调顺序对比 | [回调机制](#回调机制callback) | flowchart | 为什么记忆注入要在优化前？ |
-| 11 | `Tool` trait 装配 | [工具系统](#工具系统) | flowchart | schema 怎么变成 LLM 的 tools？ |
-| 12 | `final_answer` 终局判定 | [工具系统](#工具系统) | flowchart | 什么时候算"答完了"？ |
-| 13 | `build_toolbox()` 组装 | [工具系统](#工具系统) | flowchart | 工具从哪来？ |
-| 14 | MCP 动态工具时序 | [工具系统](#工具系统) | sequenceDiagram | 子进程 MCP 怎么跑？ |
-| 15 | 记忆写入 / 读取流程 | [长期记忆系统](#长期记忆系统) | flowchart | 记忆怎么存、怎么查？ |
-| 16 | 记忆闭环时序 | [长期记忆系统](#长期记忆系统) | sequenceDiagram | 写入→检索→注入完整链路？ |
-| 17 | 上下文优化四种手段 | [上下文优化器](#上下文优化器) | flowchart | token 超了怎么办？ |
-| 18 | 核心类型关系图 | [会话与事件模型](#会话与事件模型) | classDiagram | 类型之间什么关系？ |
-| 19 | GAIA 评测流程 | [GAIA 基准评测](#gaia-基准评测) | flowchart | 有/无工具如何对照？ |
-| 20 | RAG 检索管线 | [模块详解](#模块详解) | flowchart | 切片→向量化→排序怎么做？ |
+| #   | 图                            | 所在小节                              | 类型            | 回答什么问题                       |
+| --- | ----------------------------- | ------------------------------------- | --------------- | ---------------------------------- |
+| 1   | 演进主线时间线                | [技术演进流程](#技术演进流程)         | timeline        | 15 个阶段怎么走过来的？            |
+| 2   | 项目全景脑图                  | [项目全景脑图](#项目全景脑图)         | mindmap         | 这个项目有哪些部分？               |
+| 3   | 模块依赖关系图                | [分层架构图](#分层架构图)             | flowchart       | 模块之间怎么依赖？                 |
+| 4   | 层级职责速览                  | [分层架构图](#分层架构图)             | flowchart       | 五层职责怎么划？                   |
+| 5   | Agent 主流程（入口 + 主循环） | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `run()` 前后做了什么？             |
+| 6   | Agent 状态机                  | [Agent 运行主流程](#agent-运行主流程) | stateDiagram    | `run()` 可能返回哪些状态？         |
+| 7   | 单步决策树                    | [Agent 运行主流程](#agent-运行主流程) | flowchart       | LLM 响应三种分支分别怎么走？       |
+| 8   | 工具执行细节                  | [Agent 运行主流程](#agent-运行主流程) | flowchart       | `act.rs` 里发生了什么？            |
+| 9   | 工具确认时序图                | [Agent 运行主流程](#agent-运行主流程) | sequenceDiagram | 人工审批如何跨两次 `run()`？       |
+| 10  | 回调三个扩展点                | [回调机制](#回调机制callback)         | flowchart       | 回调能改写什么？                   |
+| 11  | 回调顺序对比                  | [回调机制](#回调机制callback)         | flowchart       | 为什么记忆注入要在优化前？         |
+| 12  | `Tool` trait 装配             | [工具系统](#工具系统)                 | flowchart       | schema 怎么变成 LLM 的 tools？     |
+| 13  | 工具来源分类                  | [工具系统](#工具系统)                 | flowchart       | 内置/沙箱/MCP/Agent 工具怎么统一？ |
+| 14  | `final_answer` 终局判定       | [工具系统](#工具系统)                 | flowchart       | 什么时候算"答完了"？               |
+| 15  | `build_toolbox()` 组装        | [工具系统](#工具系统)                 | flowchart       | 工具从哪来？                       |
+| 16  | MCP 动态工具时序              | [工具系统](#工具系统)                 | sequenceDiagram | 子进程 MCP 怎么跑？                |
+| 17  | 记忆写入 / 读取流程           | [长期记忆系统](#长期记忆系统)         | flowchart       | 记忆怎么存、怎么查？               |
+| 18  | 记忆闭环时序                  | [长期记忆系统](#长期记忆系统)         | sequenceDiagram | 写入→检索→注入完整链路？           |
+| 19  | 上下文优化四种手段            | [上下文优化器](#上下文优化器)         | flowchart       | token 超了怎么办？                 |
+| 20  | 核心类型关系图                | [会话与事件模型](#会话与事件模型)     | classDiagram    | 类型之间什么关系？                 |
+| 21  | GAIA 评测流程                 | [GAIA 基准评测](#gaia-基准评测)       | flowchart       | 有/无工具如何对照？                |
+| 22  | RAG 检索管线                  | [模块详解](#模块详解)                 | flowchart       | 切片→向量化→排序怎么做？           |
+| 23  | 沙箱宿主桥接时序              | [模块详解](#模块详解)                 | sequenceDiagram | 沙箱里的代码怎么回调宿主工具？     |
+| 24  | 三种工作流上下文语义          | [模块详解](#模块详解)                 | flowchart       | 串行/并行/循环怎么共享上下文？     |
 
 > **图例约定**：
 > 🟦 蓝 = 入口/数据流　🟧 橙 = Agent 编排　🟪 紫 = 扩展点/回调　🟩 绿 = 能力模块　🟥 红 = 错误/失败路径
@@ -226,8 +1142,9 @@ mindmap
   root((Zephyr<br/>Rust AI Agent))
     入口层
       main.rs
-        记忆闭环演示
-        四步验证
+        终端交互式 Agent
+        行式 REPL
+        Agent 树装配
       bin/gaia.rs
         GAIA 基准评测
         有工具 vs 无工具
@@ -237,15 +1154,25 @@ mindmap
         端到端 RAG
       examples/planning.rs
         规划式研究助手
+      examples/multi_agent.rs
+        transfer / sequential
+        parallel / loop
+        agent-tool
+      examples/memory_demo.rs
+        记忆闭环
+      examples/sandbox.rs
+        沙箱代码执行
     Agent 编排层
       model.rs
         Agent 结构体
         builder 式回调注册
         prepare_llm_request
         process_confirmations
+        Agent 树 set_sub_agents
       runtime.rs
         主循环
         max_steps 保护
+        转移交接
       runtime/step.rs
         单步编排
         终局判定
@@ -255,9 +1182,11 @@ mindmap
       runtime/act.rs
         工具执行
         确认挂起
+        转移拦截
         前后置回调
       context.rs
         ExecutionContext
+        transfer_to / transfer_count
       event.rs
         AgentEvent
         ContentItem
@@ -290,6 +1219,7 @@ mindmap
         execute
         requires_confirmation
       build_toolbox
+        build_basic_toolbox
       内置工具
         calculator
         web_search Tavily
@@ -299,11 +1229,33 @@ mindmap
         unzip_file
         read_media
         create_tasks
+        reflection
         final_answer
         recall_memory
+        github_stars
+      沙箱工具
+        execute_python
+        bash_tool
+        upload_file
+      Agent 化工具
+        transfer_to_agent
+        AgentTool 包装器
       MCP 动态工具
         McpClient 子进程
         McpTool 适配
+    多智能体层
+      AgentNode trait
+      workflow
+        sequential
+        parallel
+        loop
+    沙箱层
+      config 环境变量开关
+      podman 容器执行器
+        网络默认关闭
+        根文件系统只读
+      runner.py stdio 协议
+      bridge 宿主工具回调
     记忆层
       TaskMemoryManager
         save 写入
@@ -344,6 +1296,10 @@ mindmap
         Pending
         InProgress
         Completed
+    技能层
+      skill.rs
+        SKILL.md frontmatter 解析
+        只注入 name / description
     基础设施
       constant.rs
         模型名 / 工具名
@@ -352,7 +1308,8 @@ mindmap
         DashScope 兼容模式
       SQLite 文件
       MCP stdio
-      Tavily / HF
+      Podman 容器
+      Tavily / HF / GitHub
 ```
 
 ---
@@ -364,22 +1321,31 @@ mindmap
 ```mermaid
 flowchart TB
     subgraph ENTRY["入口层 src/ · src/bin/ · examples/"]
-        MAIN["main.rs<br/>记忆闭环演示"]
+        MAIN["main.rs<br/>终端交互式 Agent"]
         GAIA["bin/gaia.rs<br/>GAIA 评测"]
         MCPBIN["bin/wikipedia_mcp_server.rs"]
         EX1["examples/web_rag.rs"]
         EX2["examples/planning.rs"]
+        EX3["examples/multi_agent.rs"]
+        EX4["examples/memory_demo.rs"]
+        EX5["examples/sandbox.rs"]
+        EX6["examples/knowledge_demo.rs<br/>examples/hybrid_search_demo.rs"]
     end
 
     subgraph AGENT["Agent 编排层 src/agent/"]
-        MODEL["model.rs<br/>Agent / 回调注册"]
-        RUNTIME["runtime.rs<br/>主循环"]
+        MODEL["model.rs<br/>Agent / 回调注册 / Agent 树"]
+        RUNTIME["runtime.rs<br/>主循环 + 转移交接"]
         STEP["runtime/step.rs<br/>单步编排"]
         THINK["runtime/think.rs"]
         ACT["runtime/act.rs"]
         CTX["context.rs<br/>ExecutionContext"]
         EVENT["event.rs<br/>AgentEvent"]
         CONF["tool_confirmation.rs"]
+    end
+
+    subgraph MULTI["多智能体层 src/multi_agent/"]
+        MA["node.rs<br/>AgentNode trait"]
+        MWF["workflow/<br/>sequential / parallel / loop"]
     end
 
     subgraph CALLBACK["回调层 src/agent/callback/"]
@@ -391,8 +1357,18 @@ flowchart TB
 
     subgraph TOOLS["工具层 src/tool/"]
         TOOL["tool.rs<br/>Tool trait + build_toolbox"]
-        BUILTIN["calculator / web_search<br/>file/* / final_answer<br/>recall_memory / planning"]
+        BUILTIN["calculator / web_search<br/>file/* / final_answer<br/>recall_memory / planning<br/>reflection / github_stars"]
+        KTOOL["knowledge_tool.rs<br/>search_knowledge / add_knowledge"]
+        CODET["code/<br/>execute_python / bash / upload"]
+        AGTT["agent_tool.rs<br/>Agent-as-Tool"]
+        TRF["transfer.rs<br/>transfer_to_agent"]
         MCPC["mcp/client.rs<br/>mcp/mcp_tool.rs"]
+    end
+
+    subgraph SANDBOX["沙箱层 src/sandbox/"]
+        SBOX["podman.rs<br/>容器执行器"]
+        SBRIDGE["bridge.rs<br/>宿主工具回调"]
+        SCFG["config.rs<br/>环境变量开关"]
     end
 
     subgraph MEMORY["记忆层 src/memory/"]
@@ -415,6 +1391,16 @@ flowchart TB
         VEC["vector_search.rs"]
     end
 
+    subgraph KNOW["知识库层 src/knowledge/"]
+        KBMGR["knowledge_base.rs<br/>KnowledgeBaseManager"]
+        KBSTORE["store.rs<br/>KnowledgeStore (SQLite)"]
+        KBIDX["index.rs<br/>vec0 + FTS5 索引"]
+        KBTOK["tokenizer.rs<br/>中英混合分词"]
+        KBHYB["hybrid.rs<br/>RRF 融合"]
+        KBMODEL["model.rs<br/>Document / Chunk"]
+        KBEMB["embedder.rs<br/>Embedder trait"]
+    end
+
     subgraph SESSION["会话层 src/session/"]
         SM["session_manager.rs<br/>SessionManager"]
         SMODEL["model.rs<br/>Session"]
@@ -434,11 +1420,15 @@ flowchart TB
         TAVILY["Tavily Search"]
         HF["HuggingFace Dataset"]
         DB[("SQLite 文件")]
+        PODMAN["Podman 容器"]
+        GH["GitHub API"]
     end
 
     MAIN --> AGENT
     MAIN --> MEMORY
     MAIN --> TOOLS
+    MAIN --> SANDBOX
+    MAIN --> MULTI
     GAIA --> AGENT
     GAIA --> TOOLS
     GAIA --> HF
@@ -446,12 +1436,17 @@ flowchart TB
     EX1 --> TOOLS
     EX2 --> AGENT
     EX2 --> TOOLS
+    EX3 --> MULTI
+    EX4 --> MEMORY
+    EX5 --> SANDBOX
+    EX6 --> KNOW
     MCPBIN -.stdio.-> MCPC
 
     AGENT --> CALLBACK
     AGENT --> TOOLS
     AGENT --> LLM
     AGENT --> SESSION
+    AGENT --> MULTI
 
     MODEL --> TOOL
     RUNTIME --> STEP
@@ -468,8 +1463,22 @@ flowchart TB
 
     TOOL --> BUILTIN
     TOOL --> MCPC
+    TOOL --> CODET
+    TOOL --> AGTT
+    TOOL --> KTOOL
+    MODEL --> TRF
     BUILTIN --> TAVILY
+    BUILTIN --> GH
     MCPC --> MCPSRV
+    AGTT --> AGENT
+    KTOOL --> KBMGR
+
+    CODET --> SANDBOX
+    SANDBOX --> PODMAN
+    SBRIDGE -.-> BUILTIN
+    SCFG -.-> SANDBOX
+
+    MULTI --> AGENT
 
     MGR --> STORE
     MGR --> MEMPROMPT
@@ -484,6 +1493,17 @@ flowchart TB
     VEC --> SIM
     VEC --> CHUNK
 
+    KBMGR --> KBSTORE
+    KBMGR --> KBMODEL
+    KBMGR --> KBEMB
+    KBMGR --> CHUNK
+    KBEMB --> EMB
+    KBSTORE --> DB
+    KBSTORE --> KBIDX
+    KBIDX --> KBTOK
+    KBSTORE --> KBHYB
+    KBHYB --> KBIDX
+
     SM --> SMODEL
     TOOL --> PLAN
     AGENT -.-> CONST
@@ -497,13 +1517,14 @@ flowchart TB
     classDef llm fill:#e6f7f7,stroke:#17a2b8
     classDef ext fill:#f5f5f5,stroke:#888
 
-    class MAIN,GAIA,MCPBIN,EX1,EX2 entry
-    class MODEL,RUNTIME,STEP,THINK,ACT,CTX,EVENT,CONF agent
+    class MAIN,GAIA,MCPBIN,EX1,EX2,EX3,EX4,EX5,EX6 entry
+    class MODEL,RUNTIME,STEP,THINK,ACT,CTX,EVENT,CONF,MA,MWF agent
     class MEM,OPT,APPROVAL,COMP cb
-    class TOOL,BUILTIN,MCPC tool
+    class TOOL,BUILTIN,MCPC,CODET,AGTT,TRF,SBOX,SBRIDGE,SCFG,KTOOL tool
     class MGR,STORE,MEMPROMPT mem
+    class KBMGR,KBSTORE,KBMODEL,KBEMB,KBIDX,KBTOK,KBHYB tool
     class ASK,REQ,ANS,SEM llm
-    class GATEWAY,MCPSRV,TAVILY,HF,DB ext
+    class GATEWAY,MCPSRV,TAVILY,HF,DB,PODMAN,GH ext
 ```
 
 ### 层级职责速览
@@ -525,13 +1546,13 @@ flowchart LR
     style L5 fill:#f5f5f5
 ```
 
-| 层 | 位置 | 职责 | 关键规则 |
-| --- | --- | --- | --- |
-| 入口层 | `src/main.rs`、`src/bin/`、`examples/` | 装配依赖、驱动场景 | 不写业务逻辑，只做装配 |
-| 编排层 | `src/agent/` | 控制"想 → 做 → 判"的循环 | 只依赖 trait，不依赖具体实现 |
-| 扩展层 | `src/agent/callback/`、`src/tool/` | 提供可插拔能力点 | 全部通过 trait 注册 |
-| 能力层 | `src/memory/`、`src/llm/`、`src/search/`、`src/session/` | 提供具体能力 | 相互之间尽量不横向依赖 |
-| 基础设施 | `src/constant.rs`、外部服务 | 配置与 IO | 配置不硬编码在业务代码 |
+| 层       | 位置                                                                                                        | 职责                     | 关键规则                     |
+| -------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ | ---------------------------- |
+| 入口层   | `src/main.rs`、`src/bin/`、`examples/`                                                                      | 装配依赖、驱动场景       | 不写业务逻辑，只做装配       |
+| 编排层   | `src/agent/`、`src/multi_agent/`                                                                            | 控制"想 → 做 → 判"的循环 | 只依赖 trait，不依赖具体实现 |
+| 扩展层   | `src/agent/callback/`、`src/tool/`                                                                          | 提供可插拔能力点         | 全部通过 trait 注册          |
+| 能力层   | `src/memory/`、`src/llm/`、`src/search/`、`src/knowledge/`、`src/session/`、`src/sandbox/`、`src/planning/` | 提供具体能力             | 相互之间尽量不横向依赖       |
+| 基础设施 | `src/constant.rs`、`src/skill.rs`、外部服务                                                                 | 配置与 IO                | 配置不硬编码在业务代码       |
 
 ---
 
@@ -583,12 +1604,20 @@ flowchart TD
     INC --> PEND{"pending_tool_calls 非空?"}
     PEND -->|yes| SAVE2["session_manager.save&#40;session&#41;"]
     SAVE2 --> RETP["return AgentResult&#40;None, PendingConfirmation&#41;"]
-    PEND -->|no| LOOP
+    PEND -->|no| TRF{"transfer_to 有值?"}
+    TRF -->|yes| TRFC{"transfer_count >= MAX_TRANSFERS?"}
+    TRFC -->|yes| BAIL2["bail! 'transfer exceeded max'"]
+    TRFC -->|no| TRFH["找目标 agent<br/>current_step = 0<br/>save&#40;session&#41;<br/>递归 run_in_context"]
+    TRF -->|no| LOOP
 
     style BAIL fill:#ffe8ec
+    style BAIL2 fill:#ffe8ec
     style RETC fill:#e8f8f0
     style RETP fill:#fff4e6
+    style TRFH fill:#f0e8ff
 ```
+
+> **审批优先于转移**：同一步里既请求了危险工具又请求了 transfer 时，先处理审批，否则 pending 会留在错误的 agent 上。
 
 ```mermaid
 stateDiagram-v2
@@ -784,16 +1813,16 @@ flowchart LR
 
 ### `src/agent/` — Agent 编排
 
-| 文件                   | 职责                                                                                                                                                                   |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `model.rs`             | `Agent` 结构体、回调注册 builder（`with_max_steps` / `with_before_llm_callbacks` 等）、`prepare_llm_request`、`process_confirmations`、`AgentResult<T>`、`AgentStatus` |
-| `runtime.rs`           | 主循环、步数上限保护、最终结果反序列化                                                                                                                                 |
-| `runtime/step.rs`      | 单步编排：`think` → 分支决策 → `act_all` → 终局判定                                                                                                                    |
-| `runtime/think.rs`     | 组装 `CreateChatCompletionRequestArgs`（model / max_tokens=2048 / tools / tool_choice）并发起调用                                                                      |
-| `runtime/act.rs`       | 工具调用执行、确认挂起、前后置回调调用、事件写入                                                                                                                       |
-| `context.rs`           | `ExecutionContext`：`execution_id` / `current_step` / `final_result` / `session`                                                                                       |
-| `event.rs`             | `AgentEvent`（事件信封）与 `ContentItem`（`Message` / `ToolCall` / `ToolResult`）、`ToolResultStatus`                                                                  |
-| `tool_confirmation.rs` | `PendingToolCall`（挂起项）、`ToolConfirmation`（审批结果）                                                                                                            |
+| 文件                   | 职责                                                                                                                                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model.rs`             | `Agent` 结构体、回调注册 builder（`with_max_steps` / `with_before_llm_callbacks` 等）、`prepare_llm_request`、`process_confirmations`、Agent 树（`set_sub_agents` / `transfer_targets`）、`AgentResult<T>`、`AgentStatus` |
+| `runtime.rs`           | 主循环、步数上限保护、转移交接、最终结果反序列化                                                                                                                                                                          |
+| `runtime/step.rs`      | 单步编排：`think` → 分支决策 → `act_all` → 终局判定                                                                                                                                                                       |
+| `runtime/think.rs`     | 组装 `CreateChatCompletionRequestArgs`（model / max_tokens=2048 / tools / tool_choice）并发起调用                                                                                                                         |
+| `runtime/act.rs`       | 工具调用执行、确认挂起、转移工具拦截、前后置回调调用、事件写入                                                                                                                                                            |
+| `context.rs`           | `ExecutionContext`：`execution_id` / `current_step` / `final_result` / `session` / `transfer_to` / `transfer_count` / `transfer_history`                                                                                  |
+| `event.rs`             | `AgentEvent`（事件信封）与 `ContentItem`（`Message` / `ToolCall` / `ToolResult`）、`ToolResultStatus`                                                                                                                     |
+| `tool_confirmation.rs` | `PendingToolCall`（挂起项）、`ToolConfirmation`（审批结果）                                                                                                                                                               |
 
 `Agent` 的 builder 风格让装配非常直观：
 
@@ -811,6 +1840,15 @@ let agent = Agent::new(
 ```
 
 > 注意 `think()` 内部硬编码使用 `GPT_6_LUNA_PRO_MODEL` 作为请求模型，而 `Agent.model` 字段目前仅用于记录；这是当前实现的已知不一致点。
+
+### `src/multi_agent/` — 多智能体
+
+| 文件                     | 职责                                                            |
+| ------------------------ | --------------------------------------------------------------- |
+| `node.rs`                | `AgentNode` trait，`Agent` 的实现（重置步数预算、注入用户消息） |
+| `workflow/sequential.rs` | 串行流水线                                                      |
+| `workflow/parallel.rs`   | 并行分叉 + 事件合并                                             |
+| `workflow/loop.rs`       | 循环 + 可插拔停止条件 + `max_iterations` 上限                   |
 
 ### `src/llm/` — LLM 接入层
 
@@ -910,12 +1948,12 @@ flowchart LR
 
 ### `src/search/` — 检索层
 
-| 文件            | 职责                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `embedding.rs`  | `embed_texts()` / `embed_text()`，调用 OpenAI 兼容 embedding 接口并按 `index` 排序还原顺序 |
-| `chunking.rs`   | `fixed_length_chunking(text, chunk_size, overlap)` 固定长度滑动切片                     |
-| `similarity.rs` | `cosine_similarity(a, b)` 余弦相似度                                                    |
-| `vector_search.rs` | `vector_search(query, chunks, top_k)`：查询与候选同时 embedding，按相似度降序取 top_k  |
+| 文件               | 职责                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `embedding.rs`     | `embed_texts()` / `embed_text()`，调用 OpenAI 兼容 embedding 接口并按 `index` 排序还原顺序；单批 10 条自动分批  |
+| `chunking.rs`      | `fixed_length_chunking(text, chunk_size, overlap)` 固定长度滑动切片；`chunking_with_offsets()` 额外返回原文偏移 |
+| `similarity.rs`    | `cosine_similarity(a, b)` 余弦相似度                                                                            |
+| `vector_search.rs` | `vector_search(query, chunks, top_k)`：查询与候选同时 embedding，按相似度降序取 top_k                           |
 
 #### RAG 检索管线
 
@@ -959,7 +1997,177 @@ start=6  → [6..10) "ghij"   （end == len，结束）
 重叠部分保证语义连续性，避免答案正好被切在边界上
 ```
 
-> embedding 接口单批最多 20 条，超出会报 `batch size is invalid`。
+> embedding 接口单批最多 **10** 条，超出会报 `batch size is invalid`。
+> `embed_texts()` 内部已按 10 条自动分批，调用方可以传任意长度的列表。
+> （早期文档写的是 20，是未实测的估计值，实际调用会 400。）
+
+### `src/knowledge/` — 文档知识库（RAG）
+
+`src/search/` 提供的是**检索原语**（切片、embedding、余弦相似度），每次调用都得把候选重新算一遍向量，没有落库。本模块补上完整链路：**文档 → 切片 → 向量入库 → 混合检索 → 拼进 prompt**。
+
+| 文件                | 职责                                                                       |
+| ------------------- | -------------------------------------------------------------------------- |
+| `model.rs`          | `Document`（原始文档）、`Chunk`（切片+向量）、`SearchHit` / `SearchResult` |
+| `store.rs`          | `KnowledgeStore`：SQLite 持久化 + 混合检索编排                            |
+| `index.rs`          | `KnowledgeIndex`：vec0 向量索引 + FTS5 关键词索引（含同步触发器）        |
+| `tokenizer.rs`      | 中英混合分词器（中文 bigram + 英文整词）                                 |
+| `hybrid.rs`         | RRF（Reciprocal Rank Fusion）融合多路召回结果                             |
+| `embedder.rs`       | `Embedder` trait；`ApiEmbedder` 走接口，`FakeEmbedder` 供离线测试          |
+| `knowledge_base.rs` | `KnowledgeBaseManager`：编排切片 → embedding → 落库 → 检索                 |
+
+#### 与 `src/memory/` 的区别
+
+两者都用 SQLite + embedding，但语义完全不同，所以独立成模块：
+
+|          | `src/memory/`（长期记忆）            | `src/knowledge/`（文档知识库） |
+| -------- | ------------------------------------ | ------------------------------ |
+| 存什么   | LLM 抽取的**解题经验**（结构化字段） | **原始文档**（原样保留全文）   |
+| 检索目标 | 找到**相似问题**                     | 找到**相关段落**               |
+| 内容来源 | Agent 执行事件                       | 用户导入的文档                 |
+| 注入方式 | `MemoryInjectionCallback` 自动注入   | 工具调用 / 手动拼 prompt       |
+
+#### 混合检索流程
+
+检索是**两路召回 + RRF 融合**：
+
+```mermaid
+flowchart TD
+    subgraph ADD["写入路径 add_document&#40;title, source, content&#41;"]
+        A0(["文档全文"]) --> A1["chunking_with_offsets&#40;<br/>chunk_size=500, overlap=50&#41;"]
+        A1 --> A2["标题 + 切片文本"]
+        A2 --> A3["Embedder::embed&#40;&#41;<br/>分批调用 embedding 接口"]
+        A3 --> A4["chunks 表<br/>文本 + 向量 blob"]
+        A4 --> A5["触发器自动同步<br/>vec0 向量索引 + FTS5 关键词索引"]
+    end
+
+    subgraph SRCH["检索路径 search&#40;query, top_k&#41;"]
+        Q0(["查询文本"]) --> Q1["Embedder::embed&#40;query&#41;"]
+        Q0 --> Q6["tokenizer::tokenize_or&#40;&#41;<br/>中文 bigram + 英文整词"]
+        Q1 --> Q2["vec0 KNN<br/>近似最近邻 O&#40;log N&#41;"]
+        Q6 --> Q3["FTS5 BM25<br/>倒排索引"]
+        Q2 --> Q4["两路结果转排名列表"]
+        Q3 --> Q4
+        Q4 --> Q5["RRF 融合<br/>score = Σ 1&#40;k + rank&#41;"]
+        Q5 --> Q7(["Vec&lt;SearchHit&gt;<br/>带 title / source / offset"])
+    end
+
+    A5 --> Q2
+    A5 --> Q3
+
+    style ADD fill:#e8f8f0
+    style SRCH fill:#fff4e6
+```
+
+> **标题参与 embedding**：同一段文字在不同文档里语义可能完全不同，
+> 把标题拼进向量文本能让"讲 Rust 的文档"和"讲 Python 的文档"区分开。
+
+#### 数据表
+
+```sql
+documents (id, title, source, content, created_at)
+
+chunks    (id, document_id → documents ON DELETE CASCADE,
+           start_offset, text, embedding)      -- embedding 为小端 f32 blob
+
+-- 向量索引：sqlite-vec 的 vec0 虚表，自带近似最近邻索引
+chunk_embeddings (chunk_id, embedding float[1024] distance_metric=cosine)
+
+-- 关键词索引：FTS5 倒排索引 + BM25
+chunk_fts (chunk_id UNINDEXED, tokens, tokenize='unicode61')
+```
+
+两张索引表都由**触发器**与 `chunks` 保持同步，删除文档时索引自动清理，不留孤儿数据。
+
+#### 三个关键设计
+
+**1. 为什么用 RRF 而不是加权分数相加**
+
+向量检索返回余弦相似度（0~1，越大越像），关键词检索返回 BM25 分数（负值，越小越相关）。两者量纲完全不同，没有可比基准 —— 归一化加权会随查询漂移，直接相加则 BM25 的负值会抵消向量分数。
+
+RRF 只用**排名**不用分数，天然规避量纲问题：
+
+```text
+score(d) = Σ  1 / (k + rank_i(d))
+           i
+```
+
+被两路同时命中的文档会累积得分，这正是混合检索想要的行为。
+
+**2. 中文分词为什么要自己写**
+
+SQLite FTS5 自带分词器对中文支持很差：`unicode61` 把整段中文当一个 token；`trigram` 要求 ≥3 字符，导致 **2 字查询（"面积"）完全搜不到** —— 而这在中文里非常常见。
+
+本模块自己把中文切成 **bigram**（相邻两字）再写进 FTS5：
+
+```text
+"圆的面积公式"  →  圆的 的面 面积 积公 公式
+```
+
+英文不能这么切（"TCP" 切成 "TC"/"CP" 就搜不到了），所以**连续 ASCII 字母数字整体保留为一个 token**：
+
+```text
+"TCP 是面向连接的协议"  →  TCP 是面 面向 向连 连接 接的 的协 协议
+```
+
+每个 token 都被双引号包裹，避免 FTS5 把 `*`、`(` 等字符当成语法。
+
+**3. 关键词路为什么用 OR 而不是 AND**
+
+bigram 切分后，一个长查询会拆出多个 bigram，而这些 bigram 未必出现在同一篇文档里。用 AND 的话只要缺一个 bigram 就**完全召回不到任何结果**（实测确认），等于关键词路失效。
+
+用 OR 放宽召回，再交给 BM25 按词频与 IDF 重排。
+
+#### 检索方式
+
+| 方法                   | 用途                                         | 阈值过滤   |
+| ---------------------- | -------------------------------------------- | ---------- |
+| `search()`（默认）     | 混合检索，RRF 融合                           | 不套阈值   |
+| `search_vector_only()` | 纯向量；语义相近但用词不同也能找到           | 套阈值     |
+| `search_keyword_only()`| 纯 BM25；专有名词、函数名、错误码更准         | 不套阈值   |
+
+> **混合路径为什么不套 `min_similarity` 阈值**：
+> 阈值是针对余弦相似度设计的，但关键词路的命中是**字面精确匹配**。
+> 查 `std::Vec` 这类专有名词时，字面命中的片段余弦相似度可能只有 0.2，
+> 套用阈值会把最精准的命中过滤掉，关键词路等于白做。
+> 两路命中本身就是"相关"的证据，质量由 RRF 排名和 `top_k` 截断保证。
+
+#### 用法
+
+```rust
+use zephyr::{
+    constant::TEXT_EMBEDDING_3_SMALL_MODEL,
+    knowledge::knowledge_base::KnowledgeBaseManager,
+};
+
+let kb = KnowledgeBaseManager::new("knowledge.db", TEXT_EMBEDDING_3_SMALL_MODEL)?
+    .with_chunking(500, 50)
+    .with_top_k(5);
+
+// 入库
+kb.add_document("Rust 所有权", "https://doc.rust-lang.org/...", "所有权是...").await?;
+
+// 检索
+let result = kb.search("Rust 的借用规则是什么", 3).await?;
+for hit in &result.hits {
+    println!("{:.3} {} — {}", hit.similarity, hit.title, hit.text);
+}
+
+// 直接得到可放进 prompt 的上下文
+let context = kb.search_and_format("所有权解决什么问题", 2).await?;
+```
+
+完整演示：`cargo run --example knowledge_demo`
+
+#### 已知限制
+
+- **向量维度不可变**：`vec0` 虚表的维度在建表时固定，换 embedding 模型或维度需要**重建库**，
+  否则写入会被 sqlite-vec 拒绝（`Dimension mismatch`）。`ApiEmbedder::with_dim()` 可显式指定。
+- **bigram 的固有代价**：中文按相邻两字切分会引入一些无意义的跨字组合
+  （"面积"与"积累"共享"积"），这一点靠 BM25 的 IDF 加权缓解，罕见字的 bigram 权重更高。
+- **向量召回是近似的**：`vec0` 用近似最近邻，召回结果可能与暴力检索略有差异，
+  追求绝对精确可调用 `search_vector_only()` 走暴力路径。
+- **混合路径不套相似度阈值**：这是有意为之（见上文"混合路径为什么不套 `min_similarity` 阈值"），
+  代价是混合检索的结果里可能混入相关性一般的片段，依赖 `top_k` 截断控制规模。
 
 ### `src/planning/` — 任务规划
 
@@ -1004,6 +2212,187 @@ flowchart LR
 
     style E fill:#e8f8f0
 ```
+
+---
+
+### `src/sandbox/` — 代码沙箱
+
+让模型执行真实代码是能力跃迁，也是最大的安全风险。`src/sandbox/` 的做法是**容器隔离 + 宿主桥接**两层。
+
+| 文件           | 职责                                                            |
+| -------------- | --------------------------------------------------------------- |
+| `config.rs`    | 从环境变量读取开关与路径，`settings_from(get)` 便于测试注入假值 |
+| `podman.rs`    | `PodmanSandbox`：拉起容器、执行命令、处理 stdio 协议            |
+| `runner.rs`    | 内嵌 `runner.py` 源码，沙箱内常驻进程                           |
+| `bridge.rs`    | `SandboxTool` trait、Python stub 生成、宿主侧 dispatch          |
+| `workspace.rs` | 工作区路径校验，防止沙箱内路径逃逸                              |
+
+#### 安全默认值
+
+```rust
+PodmanConfig {
+    memory: "512m",
+    cpus: 1.0,
+    pids_limit: 256,
+    network: NetworkPolicy::Disabled,   // 默认断网
+    read_only_rootfs: true,             // 根文件系统只读
+    lifetime: Duration::from_secs(300),// 会话最长 5 分钟
+    exec_timeout: Duration::from_secs(30),
+}
+```
+
+#### 宿主桥接
+
+沙箱里的 Python 可以直接调用宿主上的工具。做法是宿主为每个 `SandboxTool` 生成一段 stub 注入沙箱：
+
+```rust
+pub fn python_stub(tool: &dyn SandboxTool) -> String {
+    format!(
+        "def {name}(**kwargs):\n    \"\"\"{desc}\"\"\"\n    return _call_tool(\"{name}\", kwargs)\n"
+    )
+}
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant PY as 沙箱内 Python
+    participant RUN as runner.py
+    participant HOST as 宿主 Rust
+    participant T as 宿主工具
+    PY->>RUN: get_wikipedia_revisions("Rust")
+    RUN->>HOST: stdio JSON tool_call
+    HOST->>T: WikipediaRevisions::call(args)
+    T-->>HOST: Ok(value)
+    HOST-->>RUN: stdio JSON result
+    RUN-->>PY: 返回值
+```
+
+`SandboxTool` 的签名**故意不带 `ExecutionContext`**——沙箱内的代码不能依赖 Agent 状态，这是有意的隔离边界。
+
+#### 开关
+
+`CODE_EXECUTION` 未开启时 `register_code_tools` 直接返回空，工具也不注册，沙箱是完全可选的能力。
+
+---
+
+### `src/multi_agent/` — 多智能体编排
+
+| 文件                     | 职责                                                 |
+| ------------------------ | ---------------------------------------------------- |
+| `node.rs`                | `AgentNode` trait，统一 Agent 与 Workflow 的节点接口 |
+| `workflow/sequential.rs` | 串行流水线，后一个看得到前一个的工作                 |
+| `workflow/parallel.rs`   | 并行分叉，各分支基于同一初始状态                     |
+| `workflow/loop.rs`       | 循环直到满足停止条件或达到最大轮数                   |
+
+`AgentNode` 的设计使得 `Agent` 和 `Workflow` 可以互相嵌套：
+
+```rust
+#[async_trait]
+pub trait AgentNode: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str { "" }
+    async fn execute(
+        &self,
+        user_input: Option<String>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<AgentResult<serde_json::Value>>;
+}
+```
+
+`user_input = None` 表示"继续"，不再追加新的用户消息——这是 `ParallelWorkflow` 给每个分支喂同一初始上下文的方式。
+
+#### 三种工作流的上下文语义
+
+```mermaid
+flowchart TB
+    subgraph SEQ["SequentialWorkflow"]
+        S1["researcher"] --> S2["writer"] --> S3["editor"]
+        S1 -.->|"共享 context<br/>后一个看到前一个"| S2
+    end
+    subgraph PAR["ParallelWorkflow"]
+        P0["初始 context"] --> P1["optimist"]
+        P0 --> P2["pessimist"]
+        P0 --> P3["realist"]
+        P1 --> PM["按 agent 顺序合并事件"]
+        P2 --> PM
+        P3 --> PM
+    end
+    subgraph LOOP["LoopWorkflow"]
+        L1["writer 起草"] --> L2["reviewer 评分"]
+        L2 --> L3{"stop_condition 满足?"}
+        L3 -->|否| L1
+        L3 -->|是| L4["结束"]
+        L3 -->|"达到 max_iterations"| L5["强制结束并告警"]
+    end
+```
+
+`ParallelWorkflow` 的关键实现是给每个分支一份 **context 副本**：
+
+```rust
+let base_len = context.session.events.len();
+let results = try_join_all(
+    self.agents.iter().map(|agent| agent.execute(None, context.clone())),
+).await?;
+```
+
+合并时只取各分支**新增**的事件（从 `base_len` 之后开始），避免重复写入初始历史。
+
+`LoopWorkflow` 的停止条件是可插拔的闭包，`max_iterations` 是必填的（为 0 直接报错）：
+
+```rust
+pub type StopCondition = Arc<dyn Fn(&AgentResult<serde_json::Value>, usize) -> bool + Send + Sync>;
+
+LoopWorkflow::new(vec![writer, reviewer], 4)
+    .with_stop_condition(|result, _iteration| {
+        result.output["score"].as_u64().unwrap_or(0) >= 85
+    })
+```
+
+跑到 `max_iterations` 仍未满足条件时会打 warning 并返回最后一次结果，不会无限循环。
+
+#### 两种协作模式对比
+
+| 模式              | 上下文                     | 控制权           | 典型场景         |
+| ----------------- | -------------------------- | ---------------- | ---------------- |
+| **Transfer**      | 同一 session，共享全部历史 | 转移后**不返回** | 路由到专业领域   |
+| **Agent-as-Tool** | 子代理**全新 session**     | 返回后回到调用方 | 并行调研、子能力 |
+
+---
+
+### `src/skill.rs` — 技能加载
+
+一种"渐进式披露"的提示词技术：只把 `name` 和 `description` 注入系统提示，完整指令由模型自己在沙箱里读取。
+
+```rust
+/// A skill: a folder containing a `SKILL.md`. Only `name` and `description` go into the prompt;
+/// the full instructions are read on demand, which keeps the prompt small.
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+```
+
+frontmatter 解析只按第一个冒号切分，因此描述里可以包含冒号：
+
+```rust
+pub fn parse_frontmatter(content: &str) -> HashMap<String, String> { ... }
+```
+
+生成的提示词形如（第一行是 `## Available Skills` 标题）：
+
+```
+[标题] Available Skills
+Skills are installed at `/skills`. Read the SKILL.md file before using a skill.
+
+- **pdf-merge**: Merge multiple PDF files into one. Use when: the user wants to combine PDFs.
+
+To use a skill:
+    cat /skills/<skill-name>/SKILL.md
+```
+
+无论装多少技能，注入提示的 token 数都是常数级的。
 
 ---
 
@@ -1157,19 +2546,41 @@ flowchart LR
 
 ### 内置工具清单
 
-| 工具名          | 类型 | 说明                                                           |
-| --------------- | ---- | -------------------------------------------------------------- |
-| `calculator`    | 内置 | 表达式求值                                                     |
-| `web_search`    | 内置 | Tavily 联网搜索，返回原始文本                                  |
-| `read_file`     | 内置 | 读取文件，自动识别 txt / csv / spreadsheet / image             |
-| `list_files`    | 内置 | 列目录                                                         |
-| `delete_file`   | 内置 | 删除文件（`requires_confirmation() == true`，走挂起-审批协议） |
-| `unzip_file`    | 内置 | 解压 zip                                                       |
-| `read_media`    | 内置 | 读取 PDF / 图片 / 音频                                         |
-| `create_tasks`  | 内置 | 维护任务清单（规划）                                           |
-| `final_answer`  | 内置 | 输出最终答案；存在时 `tool_choice` 强制 `Required`             |
-| `recall_memory` | 内置 | 工具式记忆检索（与自动注入互补）                               |
-| `<MCP 工具>`    | 动态 | 由 MCP Server `list_tools()` 动态注册                          |
+| 工具名              | 类型 | 说明                                                           |
+| ------------------- | ---- | -------------------------------------------------------------- |
+| `calculator`        | 内置 | 表达式求值                                                     |
+| `web_search`        | 内置 | Tavily 联网搜索，返回原始文本                                  |
+| `read_file`         | 内置 | 读取文件，自动识别 txt / csv / spreadsheet / image             |
+| `list_files`        | 内置 | 列目录                                                         |
+| `delete_file`       | 内置 | 删除文件（`requires_confirmation() == true`，走挂起-审批协议） |
+| `unzip_file`        | 内置 | 解压 zip                                                       |
+| `read_media`        | 内置 | 读取 PDF / 图片 / 音频                                         |
+| `create_tasks`      | 内置 | 维护任务清单（规划）                                           |
+| `reflection`        | 内置 | 写下问题分析并声明是否需要重新规划                             |
+| `recall_memory`     | 内置 | 工具式记忆检索（与自动注入互补）                               |
+| `search_knowledge`  | 可选 | 文档知识库语义检索，返回带来源的原文片段                       |
+| `add_knowledge`     | 可选 | 把文档写入知识库（切片 + 向量 + 落库）                         |
+| `final_answer`      | 内置 | 输出最终答案；存在时 `tool_choice` 强制 `Required`             |
+| `github_stars`      | 内置 | 精确查询 GitHub 仓库 Star 数                                   |
+| `execute_python`    | 可选 | 沙箱内执行 Python（需 `CODE_EXECUTION=podman`）                |
+| `bash_tool`         | 可选 | 沙箱内执行 Shell 命令                                          |
+| `upload_file`       | 可选 | 上传文件到沙箱（需 `UPLOAD_ROOT`）                             |
+| `transfer_to_agent` | 动态 | 请求把控制权交给其他 Agent（按 Agent 树每步生成）              |
+| `<MCP 工具>`        | 动态 | 由 MCP Server `list_tools()` 动态注册                          |
+
+工具按来源分三类，**对 Agent 完全一致**——都只有 name / description / parameters / execute：
+
+```mermaid
+flowchart LR
+    subgraph SRC["来源"]
+        S1["内置工具<br/>src/tool/"]
+        S2["沙箱工具<br/>src/tool/code/"]
+        S3["MCP 工具<br/>src/tool/mcp/"]
+        S4["Agent 工具<br/>src/tool/agent_tool.rs"]
+    end
+    SRC --> BOX["ToolBox<br/>HashMap&lt;String, Box&lt;dyn Tool&gt;&gt;"]
+    BOX --> LLM["tools 数组 → LLM"]
+```
 
 ### `final_answer` 的特殊地位
 
@@ -1202,8 +2613,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A(["build_toolbox&#40;&#41;"]) --> B["内置工具 vec&#91;"]
-    B --> B1["calculator, web_search, unzip_file,<br/>list_files, delete_file, read_file,<br/>read_media, create_tasks"]
+    A(["build_toolbox&#40;&#41;"]) --> B["build_basic_toolbox&#40;&#41;"]
+    B --> B1["calculator, web_search, unzip_file,<br/>list_files, delete_file, read_file,<br/>read_media, create_tasks, reflection"]
     B1 --> C["McpClient::connect&#40;&#41;"]
     C --> C1["cargo run --quiet --bin wikipedia_mcp_server<br/>&#40;stdin/stdout 子进程&#41;"]
     C1 --> C2["mcp_client.list_tools&#40;&#41;"]
@@ -1215,7 +2626,19 @@ flowchart TD
     style D fill:#e8f8f0
 ```
 
+`build_basic_toolbox()` 只装本地工具，**不依赖 MCP**——`src/main.rs` 在 MCP 启动失败时回退到它，保证对话能力不受影响。
+
+沙箱工具走另一条路：`register_code_tools(&mut toolbox)` 在 `CODE_EXECUTION=podman` 时启动容器并插入 `execute_python` / `bash_tool` / `upload_file`，同时返回一段描述沙箱能力的系统提示文本。
+
 `main.rs` 在 `build_toolbox()` 之后额外插入 `final_answer` 与 `recall_memory`（它们依赖 `Arc<TaskMemoryManager>`，不放进通用工厂）。
+
+知识库工具同理，依赖 `Arc<KnowledgeBaseManager>`，由 `add_knowledge_tools()` 按 Agent 角色分别挂载：
+
+| Agent        | 挂载的知识库工具                     | 理由                                          |
+| ------------ | ------------------------------------ | --------------------------------------------- |
+| assistant    | `search_knowledge` + `add_knowledge` | 根助手负责统一管理资料，避免多 Agent 重复写入 |
+| researcher   | `search_knowledge`                   | 负责查资料的专家，只读                        |
+| math / coder | 无                                   | 与资料检索无关                                |
 
 ### MCP 动态工具
 
@@ -1505,6 +2928,124 @@ fn render_for_dedup(mem: &TaskMemory) -> String {
 > 由于 `MutexGuard` 不能跨 `.await` 持有，代码把"查缓存"和"写缓存"拆成两个独立函数。
 > 注入内容只存在于当次的 `LlmRequest`（每步重建），所以每步都要重新注入。
 
+## 文档知识库（RAG）
+
+`src/memory/` 存的是**解题经验**，`src/knowledge/` 存的是**原始文档**。后者补上了项目里缺失的一环：把外部资料（技术文档、笔记、网页）建成可检索的向量库。
+
+### 与检索层的关系
+
+`src/search/` 提供的是**检索原语**，没有存储层：
+
+```text
+vector_search(query, chunks, top_k)
+  → 把 chunks 全部重新 embedding  ← 每次检索都重算，且受单批 10 条限制
+  → 算余弦相似度排序
+```
+
+`src/knowledge/` 在这之上加了**落库**与**混合检索**：
+
+```text
+add_document(title, source, content)
+  → chunking_with_offsets()      切片，带原文偏移
+  → Embedder::embed()            分批调用 embedding 接口
+  → SQLite 写入 documents + chunks
+  → 触发器自动同步 vec0 向量索引 + FTS5 关键词索引
+
+search(query, top_k)              ← 默认：混合检索
+  ├─ 向量路：vec0 近似最近邻，O(log N)
+  ├─ 关键词路：FTS5 BM25 倒排索引
+  └─ RRF 融合 → SearchResult
+```
+
+### 三个已解决的问题
+
+**1. 全表扫描 + 内存算余弦** → 改为 **sqlite-vec 的 `vec0` 虚表**
+
+向量存进 `vec0` 虚表，它自己维护近似最近邻索引，查询约 O(log N)，
+距离由 C 扩展计算，省掉逐条反序列化。降级路径 `search_vector_only()` 仍保留全表扫描，
+但只在索引不可用时使用。
+
+**2. 只有向量召回，没有关键词召回** → 补上 **FTS5 + BM25**
+
+SQLite 内置 FTS5 虚表提供倒排索引与 BM25 排序。为解决中文分词，
+自研 `tokenizer.rs`：中文切 bigram、英文保留整词，token 用双引号包裹防止 FTS5 语法注入。
+查询侧用 OR 语义（bigram 切分后 AND 会导致完全召回不到），BM25 负责重排。
+
+两路结果用 **RRF** 融合 —— 只用排名不用分数，规避余弦相似度与 BM25 分数的量纲差异。
+
+**3. 同 id 重复入库残留旧切片** → 改为**幂等入库**
+
+`add_document_with_id()` 现在先 `replace_chunks()` 删除该文档的旧切片再写新切片。
+触发器保证向量索引与 FTS 索引同步清理。空内容重新入库也会清掉旧切片。
+
+### 设计要点
+
+**标题参与 embedding**：同一段文字在不同文档里语义可能完全不同，把标题拼进向量文本能让"讲 Rust 的文档"和"讲 Python 的文档"区分开。
+
+**切片保留原文偏移**：`chunking_with_offsets()` 在 `fixed_length_chunking()` 之外额外返回 `start_offset`，命中后可以回到原文定位，为将来的"命中片段前后扩 N 字符"留出空间。
+
+**Embedder 可替换**：`Embedder` trait 抽象出向量化，让单元测试能注入 `FakeEmbedder` 离线跑，将来换本地模型也不必改动检索链路。
+
+**标题/来源随命中返回**：`SearchHit` 带 `title` / `source`，格式化进 prompt 后模型既知道出处，也能判断可信度。
+
+**混合路径不套相似度阈值**：阈值是针对余弦相似度设计的，但关键词路命中是字面精确匹配 ——
+查 `std::Vec` 这类专有名词时，字面命中的片段余弦相似度可能只有 0.2，
+套用阈值会把最精准的命中误杀。两路命中本身就是"相关"的证据，质量由 RRF 排名保证。
+
+### 用法
+
+```rust
+use zephyr::{
+    constant::TEXT_EMBEDDING_3_SMALL_MODEL,
+    knowledge::knowledge_base::KnowledgeBaseManager,
+};
+
+let kb = KnowledgeBaseManager::new("knowledge.db", TEXT_EMBEDDING_3_SMALL_MODEL)?
+    .with_chunking(500, 50)
+    .with_top_k(5);
+
+kb.add_document("Rust 所有权", "https://doc.rust-lang.org/...", "所有权是...").await?;
+
+let result = kb.search("Rust 的借用规则是什么", 3).await?;
+let context = result.format();   // 直接拼进 prompt
+
+// 也可以只走某一路
+let vec_only = kb.search_vector_only("借用规则", 3).await?;
+let kw_only  = kb.search_keyword_only("std::Vec", 3).await?;
+```
+
+> **建库时的维度**：`vec0` 虚表的向量维度在建表时固定，
+> 必须与 embedding 模型输出一致（`text-embedding-v3` 是 1024 维）。
+> 换模型换维度需要**重建库**，否则写入会被 sqlite-vec 拒绝。
+
+### 作为 Agent 工具
+
+`src/tool/knowledge_tool.rs` 把知识库包装成两个工具，让 Agent 自己决定何时检索：
+
+| 工具               | 作用                            | 挂载位置                  |
+| ------------------ | ------------------------------- | ------------------------- |
+| `search_knowledge` | 混合检索，返回带标题/来源的片段 | assistant、researcher     |
+| `add_knowledge`    | 文档入库（切片 + 向量 + 落库）  | assistant（统一管理资料） |
+
+```rust
+use zephyr::tool::knowledge_tool::{AddKnowledgeTool, SearchKnowledgeTool};
+
+toolbox.insert(
+    "search_knowledge".to_owned(),
+    Box::new(SearchKnowledgeTool::new(kb.clone())),
+);
+```
+
+`search_knowledge` 的 `top_k` 会被夹到 `[1, 20]`——LLM 可能给出离谱的值，不设防会一次拉回几十个片段撑爆上下文。
+
+交互模式里知识库是**可选能力**：初始化失败只打印 warning 并跳过工具注册，不影响对话。`/knowledge` 命令可以查看库里有哪些文档。
+
+演示：
+
+- `cargo run --example knowledge_demo` —— 纯 API 层的入库与检索
+- `cargo run --example knowledge_tool_demo` —— Agent 通过工具检索的完整链路
+- `cargo run --example hybrid_search_demo` —— 三种检索方式的效果对比
+
 ## 上下文优化器
 
 `ContextOptimizer` 解决长会话 token 膨胀问题，是 `before_llm_callback` 中可改写 `LlmRequest` 的典型范例。
@@ -1626,12 +3167,21 @@ flowchart TD
 
 ```rust
 ContextOptimizer::new(model)
-    .with_token_threshold(1000)   // main.rs 中设为 1000 便于演示
 // 默认值：token_threshold = 20_000
 //         enable_compaction = false
 //         enbale_summarization = true
 //         summarization_keep_recent = 5
 ```
+
+可用 builder 调整：
+
+```rust
+ContextOptimizer::new(GPT_6_LUNA_PRO_MODEL)
+    .with_token_threshold(1000)                 // 调低阈值便于演示
+    .with_summarization_keep_recent(8)           // 保留更多原文
+```
+
+> `enable_compaction` 当前没有公开 builder，只能直接改字段（`pub`），默认关闭。
 
 ## 会话与事件模型
 
@@ -1641,6 +3191,7 @@ ContextOptimizer::new(model)
 classDiagram
     class Agent {
         +String name
+        +String description
         +String model
         +Vec~String~ instructions
         +Arc~ToolBox~ toolbox
@@ -1649,10 +3200,16 @@ classDiagram
         +Vec~AfterToolCallback~ after_tool_callbacks
         +Vec~BeforeLlmCallback~ before_llm_callbacks
         +Box~SessionManager~ session_manager
+        +bool disallow_transfer_to_peers
         +run&#40;T&#41;&#40;prompt, session_id, confirmations&#41; AgentResult~T~
+        +run_in_context&#40;ctx&#41; AgentResult~Value~
         +prepare_llm_request&#40;ctx&#41; LlmRequest
         +process_confirmations&#40;ctx&#41; Vec~ContentItem~
         +tool_definitions&#40;&#41; Vec~ChatCompletionTools~
+        +transfer_tool_definition&#40;&#41; Option~ChatCompletionTools~
+        +transfer_targets&#40;&#41; Vec~Arc~Agent~~
+        +find_transfer_target&#40;name&#41; Option~Arc~Agent~~
+        +set_sub_agents&#40;subs&#41; Result
         +has_final_answer_tool&#40;&#41; bool
     }
 
@@ -1661,6 +3218,9 @@ classDiagram
         +usize current_step
         +Option~String~ final_result
         +Session session
+        +Option~String~ transfer_to
+        +usize transfer_count
+        +Vec~String~ transfer_history
         +new&#40;session&#41; ExecutionContext
         +increment_step&#40;&#41;
     }
@@ -1772,7 +3332,32 @@ classDiagram
     Agent --> LlmRequest : 构造
     LlmRequest --> ToolChoice
     Agent --> Tool : 通过 ToolBox
+    Agent --> "Arc~Agent~" : sub_agents 强引用 / parent 弱引用
+    Agent --> AgentNode : 可作为节点执行
 ```
+
+### Agent 树的引用关系
+
+`Agent` 之间用 `Arc` 强引用持有子节点、用 `Weak` 弱引用指回父节点，避免引用环导致内存泄漏：
+
+```mermaid
+flowchart TD
+    ROOT["router (Arc)"] -->|"sub_agents: OnceLock&lt;Vec&lt;Arc&lt;Agent&gt;&gt;&gt;"| A["math (Arc)"]
+    ROOT -->|"sub_agents"| B["search (Arc)"]
+    A -.->|"parent: OnceLock&lt;Weak&lt;Agent&gt;&gt;"| ROOT
+    B -.->|"parent: Weak"| ROOT
+    A -.->|"parent: Weak"| B2["sibling 可见"]
+```
+
+因为 Rust 必须先有 `Arc<Self>` 才能创建 `Weak<Self>`，树的组装被拆成两步：
+
+```rust
+let math = Arc::new(Agent::new(...).with_name("math".into()));
+let router = Arc::new(Agent::new(...).with_name("router".into()));
+router.set_sub_agents(vec![math])?;
+```
+
+`set_sub_agents` 内置的校验：同级重名、已有父节点、整棵树重名、环形引用。任何一项不通过都会整体拒绝，避免留下"挂了一半"的树。
 
 ### 事件信封
 
@@ -1988,18 +3573,29 @@ Zephyr/
 ├── AGENTS.md
 ├── .env                                # 密钥配置（不入库）
 ├── examples/
-│   └── web_rag.rs                      # 端到端 RAG 示例
+│   ├── web_rag.rs                      # 端到端 RAG 示例
+│   ├── knowledge_demo.rs               # 文档知识库（RAG）演示
+│   ├── memory_demo.rs                  # 记忆闭环演示
+│   ├── knowledge_tool_demo.rs          # 知识库工具端到端演示
+│   ├── hybrid_search_demo.rs          # 三种检索方式对比
+│   ├── planning.rs                     # 规划式研究助手
+│   ├── multi_agent.rs                  # 多智能体四种模式演示
+│   └── sandbox.rs                      # 沙箱代码执行示例
+├── sandbox/
+│   ├── Containerfile                   # 沙箱镜像定义
+│   └── runner.py                       # 沙箱内常驻进程（stdio JSON 协议）
 ├── src/
 │   ├── lib.rs                          # 模块导出
-│   ├── main.rs                         # 默认二进制：记忆闭环演示
+│   ├── main.rs                         # 默认二进制：终端交互式 Agent
 │   ├── constant.rs                     # 模型名 / 工具名 / 系统提示词
+│   ├── skill.rs                        # SKILL.md 扫描与提示词生成
 │   │
 │   ├── agent/                          # ── Agent 编排 ──
-│   │   ├── model.rs                    # Agent 结构体 + 回调注册 + 请求准备
-│   │   ├── runtime.rs                  # 主循环
+│   │   ├── model.rs                    # Agent 结构体 + 回调注册 + Agent 树 + 请求准备
+│   │   ├── runtime.rs                  # 主循环 + 转移交接
 │   │   ├── runtime/step.rs             # 单步编排
 │   │   ├── runtime/think.rs            # LLM 调用
-│   │   ├── runtime/act.rs              # 工具执行
+│   │   ├── runtime/act.rs              # 工具执行 + 转移拦截
 │   │   ├── context.rs                  # ExecutionContext
 │   │   ├── event.rs                    # AgentEvent / ContentItem
 │   │   ├── tool_confirmation.rs        # PendingToolCall / ToolConfirmation
@@ -2015,17 +3611,26 @@ Zephyr/
 │   │       ├── before_tool_callback.rs
 │   │       ├── before_tool_callback/
 │   │       │   └── approval_callback.rs       # 危险工具确认
-│   │       └── after_tool_callback.rs
+│   │       ├── after_tool_callback.rs
 │   │       └── after_tool_callback/
 │   │           └── search_compressor.rs       # 搜索结果压缩
 │   │
-│   ├── tool.rs                         # Tool trait + build_toolbox()
+│   ├── tool.rs                         # Tool trait + build_toolbox() / build_basic_toolbox()
 │   ├── tool/                           # ── 工具实现 ──
 │   │   ├── calculator.rs
 │   │   ├── web_search.rs
+│   │   ├── github_stars.rs             # GitHub Star 精确查询
 │   │   ├── final_answer.rs
 │   │   ├── memory_tool.rs               # recall_memory
+│   │   ├── knowledge_tool.rs            # search_knowledge / add_knowledge
 │   │   ├── planning.rs                  # create_tasks
+│   │   ├── reflection.rs                # reflection
+│   │   ├── failing_tools.rs             # 故意失败的工具（演示错误恢复）
+│   │   ├── transfer.rs                  # transfer_to_agent（动态生成）
+│   │   ├── agent_tool.rs                # Agent-as-Tool 包装器
+│   │   ├── code/                        # 沙箱工具
+│   │   │   ├── execute_python.rs  bash.rs  upload.rs
+│   │   │   └── wikipedia.rs             # 沙箱内可调用的宿主工具
 │   │   ├── file/
 │   │   │   ├── read.rs  list.rs  delete.rs  unzip.rs
 │   │   │   ├── read/                    # txt / csv / spreadsheet / image
@@ -2053,10 +3658,34 @@ Zephyr/
 │   │   ├── embedding.rs  chunking.rs
 │   │   ├── similarity.rs  vector_search.rs
 │   │
+│   ├── knowledge.rs
+│   ├── knowledge/                       # ── 文档知识库 ──
+│   │   ├── knowledge_base.rs            # 入库 / 混合检索编排
+│   │   ├── store.rs                     # SQLite 存储
+│   │   ├── index.rs                     # vec0 向量索引 + FTS5 关键词索引
+│   │   ├── tokenizer.rs                 # 中英混合分词（中文 bigram）
+│   │   ├── hybrid.rs                    # RRF 融合
+│   │   ├── model.rs                     # Document / Chunk / SearchHit
+│   │   └── embedder.rs                  # Embedder trait + 假实现
+│   │
 │   ├── session.rs
 │   ├── session/                         # ── 会话 ──
 │   │   ├── model.rs                     # Session / State
 │   │   └── session_manager.rs           # SessionManager trait + 内存实现
+│   │
+│   ├── sandbox.rs
+│   ├── sandbox/                         # ── 代码沙箱 ──
+│   │   ├── config.rs                    # 环境变量开关
+│   │   ├── podman.rs                    # Podman 容器执行器
+│   │   ├── runner.rs                    # runner.py 内嵌
+│   │   ├── bridge.rs                    # 宿主工具 ↔ 沙箱回调协议
+│   │   └── workspace.rs                 # 工作区路径校验
+│   │
+│   ├── multi_agent.rs
+│   ├── multi_agent/                     # ── 多智能体 ──
+│   │   ├── node.rs                      # AgentNode trait
+│   │   └── workflow/
+│   │       ├── sequential.rs  parallel.rs  loop.rs
 │   │
 │   ├── planning.rs
 │   ├── planning/task.rs                 # Task / TaskStatus
@@ -2088,7 +3717,11 @@ cargo build                        # 编译
 cargo test                         # 单元测试
 cargo fmt                          # 格式化
 cargo clippy -- -D warnings        # lint
-cargo run                          # 记忆闭环演示
+cargo run                          # 终端交互式 Agent
+cargo run -- 你的问题               # 单次问答
+cargo run --example multi_agent -- parallel   # 多智能体演示
+cargo run --example memory_demo                # 记忆闭环演示
+cargo run --example knowledge_demo             # 文档知识库（RAG）演示
 cargo run --bin gaia               # GAIA 评测
 ```
 
@@ -2100,10 +3733,15 @@ cargo run --bin gaia               # GAIA 评测
 | ------------------------------------------------------------- | ---------------------------------- |
 | `think()` 硬编码模型常量，未使用 `Agent.model`                | 改为使用 `self.model`              |
 | 向量检索全表扫描 + 内存算余弦                                 | 引入 HNSW / sqlite-vec 等向量索引  |
-| 记忆存储与 embedding 未分批（>20 条会失败）                   | 批量 embedding + 分块插入          |
+| 知识库检索只有向量召回，没有 BM25 关键词召回                  | 引入 FTS5 做混合检索后融合排序     |
+| 知识库同 id 重复入库会覆盖文档元信息，但旧切片残留            | 入库前按 `document_id` 清旧切片    |
 | `ContextOptimizer.compaction` 中 `enable_compaction` 默认关闭 | 按场景开启                         |
+| `sliding_window` 已实现但未接入 `before_llm_call` 自动流程    | 作为兜底手段接入超阈值分支         |
 | 危险工具确认是阻塞式终端 `stdin` 读取                         | 抽象为异步确认接口，适配 GUI / Web |
 | `AgentEvent` 无持久化，`InMemorySessionManager` 进程重启即丢  | 增加 SQLite / Redis SessionManager |
+| 沙箱仅支持 Podman，Docker 需去掉 Podman 专属 flag             | 抽象容器运行时接口                 |
+| `MAX_TRANSFERS = 8` 为固定常量                                | 改为可配置项                       |
+| 沙箱 `lifetime` 到期后需重建会话，状态不跨容器                | 引入可持久化工作区卷               |
 
 ---
 
@@ -2112,4 +3750,6 @@ cargo run --bin gaia               # GAIA 评测
 - 教程系列：**《用Rust构建AI Agent》** — https://space.bilibili.com/361469957
 - 上游仓库：https://github.com/solenovex/rust-ai-agent
 - LLM 网关：阿里云百炼（DashScope）OpenAI 兼容模式
-- 关键依赖：`async-openai`、`rmcp`（MCP）、`rusqlite`（bundled）、`schemars`、`tiktoken-rs`、`backon`
+- 关键依赖：`async-openai`、`rmcp`（MCP）、`rusqlite`（bundled + vtab + functions）、`sqlite-vec`（向量索引）、`schemars`、`tiktoken-rs`、`backon`、`termimad`
+  - `rusqlite` 的 `vtab` feature 是 `vec0` 虚表的前提；`functions` feature 用于注册自定义分词函数
+  - `sqlite-vec` 是进程级 auto extension，**必须在建立连接前注册**，否则连接看不到 `vec0` 模块

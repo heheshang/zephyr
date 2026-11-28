@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod constant;
 pub mod gaia;
+pub mod knowledge;
 pub mod llm;
 pub mod memory;
 pub mod multi_agent;
