@@ -19,7 +19,7 @@
 - 代码在启动时通过 `dotenv::dotenv()` 加载 `.env`，embedding 与向量检索模块内部也会自行加载。
 - 目录结构（已对齐上游 `ep11-refactored`）：`src/tool` 为扁平工具模块、`src/llm/{ask,llm_answer,llm_request,semaphore}.rs`、`src/agent/callback/{before_llm_callback,before_tool_callback,after_tool_callback}`、`src/search`（chunking/embedding/similarity/vector_search）、`src/memory`、`src/session`。
 - git remote：`origin` 为 `heheshang/zephyr`，`upstream` 为 `solenovex/rust-ai-agent`；上游以 `epNN` 形式打 tag，本地保持与其文件树逐字节对齐。
-- 本地 `main` 是重写过的孤儿历史（根提交 `21a73df`），与 upstream 的 38 个提交**无共同祖先**；因此 upstream 系列的 tag（`ep04`~`ep14`、`interactive-terminal`、`refactor-after-ep10`）在 origin 上通过 `upstream-history` 分支保持可达。
+- 本仓库的里程碑 tag（`ep04`~`ep15`、`interactive-terminal`、`refactor-after-ep10`）**指向本项目自己的提交**，而非 upstream 同名 tag 的提交——本地 `main` 是重写过的孤儿历史（根提交 `21a73df`），与 upstream 的 38 个提交无共同祖先。映射关系由 tree 哈希 / diff 行数 / 特征文件三重比对确定，记录在 README「技术演进流程」的阶段总览表。
 - 记忆持久化使用 SQLite（`rusqlite` bundled），`src/main.rs` 使用 `memory_test.db` 作为库文件并在启动时清空以保证结果可复现。
 - 记忆注入顺序：先 `MemoryInjectionCallback` 再 `ContextOptimizer`，后者带 token 阈值触发上下文压缩。
 - `src/constant.rs` 内的模型常量被下游（如 `TaskMemoryManager` 的 embedding 模型）直接引用，修改时需同步确认调用点。
